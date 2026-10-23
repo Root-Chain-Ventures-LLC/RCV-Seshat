@@ -1,26 +1,25 @@
 name: publish
 
 # Publishes a Seshat release for users. The images and packages are BUILT in a private source repository, which
-# signs them, pushes the images to private staging names, uploads the packages to a private release, commits the
-# current copy of this repository's files here and then dispatches `publish-release` with the version and the
-# exact image digests. This workflow:
+# signs them, pushes the images to private staging names, commits the current copy of this repository's files here,
+# uploads every install artifact to a DRAFT release of this repository and then dispatches `publish-release` with
+# the version and the exact image digests. This workflow:
 #
 #   1. copies both images BY DIGEST to the public names (so the packages are created by, and linked to, THIS
 #      repository) together with their signature and attestation objects, and refuses to succeed unless both
 #      pull ANONYMOUSLY at the same digest and verify against the committed cosign.pub;
-#   2. downloads the private release's assets, checks SHA256SUMS against the files and SHA256SUMS.sig against the
-#      COMMITTED cosign.pub (an unsigned release is refused);
-#   3. creates the Release (title "Seshat X.Y.Z", empty notes, the install artifacts as assets), then downloads
-#      every asset anonymously and compares it with SHA256SUMS;
+#   2. downloads the assets of this repository's own draft release, checks SHA256SUMS against the files and
+#      SHA256SUMS.sig against the COMMITTED cosign.pub (an unsigned release is refused);
+#   3. publishes the draft (title "Seshat X.Y.Z", empty notes), then downloads every asset anonymously and
+#      compares it with SHA256SUMS;
 #   4. removes every older release and tag, so only the newest stable release is public.
 #
-# Secrets (repository secrets of this repository):
-#   GHCR_READ_TOKEN    reads the private staging packages. GITHUB_TOKEN cannot: a package is readable only by the
-#                      repository it is linked to. A classic personal access token with read:packages.
-#   SOURCE_READ_TOKEN  reads the private repository's release assets (fine-grained token, that one repository,
-#                      Contents: read). Optional: when it is not set GHCR_READ_TOKEN is used, which then needs
-#                      the repo scope as well.
-#   GITHUB_TOKEN       writes the public packages, the Release and the pruning (permissions below).
+# Re-running a version that is already published verifies its assets and the images again and changes nothing.
+#
+# No repository secrets. GITHUB_TOKEN does everything: it reads the private staging packages (the staging
+# packages grant this repository Actions read access), writes the public packages, and reads, publishes and
+# prunes this repository's releases (permissions below). The private repository never gives this repository a
+# credential: it only stages the draft and sends the dispatch with a short-lived app token.
 #
 # Re-run by hand with the workflow_dispatch inputs if a dispatch was missed. A run only ever publishes the
 # version it is given: the checked-out files must be that version's (the chart's appVersion says so).
@@ -39,9 +38,6 @@ on:
       tracker_digest:
         description: 'Digest of the staging seshat-device-tracker image, sha256:...'
         required: true
-      source_repo:
-        description: 'owner/name of the private source repository that holds the release assets'
-        required: true
       prerelease:
         description: 'Prerelease (does not move :latest, does not prune)'
         type: boolean
@@ -59,7 +55,7 @@ env:
   STAGING_PORTAL_IMAGE: ghcr.io/root-chain-ventures-llc/seshat-device-tracker-build
   PUBLIC_IMAGE: ghcr.io/root-chain-ventures-llc/seshat
   PUBLIC_PORTAL_IMAGE: ghcr.io/root-chain-ventures-llc/seshat-device-tracker
-  # cosign, pinned: the release is downloaded from GitHub and refused unless it matches this SHA-256.
+  # oras and cosign, pinned: each is downloaded from GitHub and refused unless it matches its SHA-256.
   ORAS_VERSION: '1.3.5'
   ORAS_SHA256: 'f48a73ea6d026a862c3919fc773da9a8c86fc259c2c737d5baed3b8b9614ad22'
   COSIGN_VERSION: '3.1.4'
@@ -84,10 +80,8 @@ jobs:
           VERSION: ${{ github.event.client_payload.version || github.event.inputs.version }}
           SESHAT_DIGEST: ${{ github.event.client_payload.seshat_digest || github.event.inputs.seshat_digest }}
           TRACKER_DIGEST: ${{ github.event.client_payload.tracker_digest || github.event.inputs.tracker_digest }}
-          SOURCE_REPO: ${{ github.event.client_payload.source_repo || github.event.inputs.source_repo }}
           PRERELEASE: ${{ github.event.client_payload.prerelease || github.event.inputs.prerelease || 'false' }}
           SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
-          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
         run: |
           set -euo pipefail
           if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
@@ -99,16 +93,6 @@ jobs:
             fi
           done
           case "$PRERELEASE" in true|false) ;; *) echo "::error::prerelease must be true or false"; exit 1 ;; esac
-          if ! printf '%s' "$SOURCE_REPO" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
-            echo "::error::source_repo '$SOURCE_REPO' is not owner/name"; exit 1
-          fi
-          owner="${SOURCE_REPO%%/*}"
-          if [ "${owner,,}" != "${GITHUB_REPOSITORY_OWNER,,}" ] || [ "${SOURCE_REPO,,}" = "${GITHUB_REPOSITORY,,}" ]; then
-            echo "::error::source_repo must be another repository of $GITHUB_REPOSITORY_OWNER"; exit 1
-          fi
-          if [ -z "$GHCR_READ_TOKEN" ]; then
-            echo "::error::repository secret GHCR_READ_TOKEN is not set: cannot read the staging images"; exit 1
-          fi
           # The files in this checkout must be this version's, or the Release would be cut on the wrong commit.
           if ! grep -Eq "^appVersion: \"?${VERSION//./\\.}\"?\$" deploy/helm/seshat/Chart.yaml; then
             echo "::error::the checked-out files are not version $VERSION (deploy/helm/seshat/Chart.yaml appVersion); the source repository commits them before it dispatches"
@@ -119,12 +103,11 @@ jobs:
             echo "version=$VERSION"
             echo "seshat_digest=$SESHAT_DIGEST"
             echo "tracker_digest=$TRACKER_DIGEST"
-            echo "source_repo=$SOURCE_REPO"
             echo "prerelease=$PRERELEASE"
             echo "tag=v$VERSION"
             echo "head=$(git rev-parse HEAD)"
           } >> "$GITHUB_OUTPUT"
-          echo "Publishing $VERSION (prerelease=$PRERELEASE, source ${SOURCE_SHA:-unknown}) from $SOURCE_REPO"
+          echo "Publishing $VERSION (prerelease=$PRERELEASE, source ${SOURCE_SHA:-unknown})"
 
       - name: Install oras and cosign
         run: |
@@ -142,15 +125,14 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Copy the images by digest to the public names, with their signatures
-        # Two credentials against one registry: the read token can see the private staging packages,
-        # GITHUB_TOKEN owns the public ones (so the packages are created by and linked to this repository).
+        # One credential against one registry: GITHUB_TOKEN reads the private staging packages (they grant this
+        # repository Actions read access) and writes the public ones (which are linked to this repository).
         # oras copies manifests and indexes byte for byte (no media-type conversion), so what users pull has
         # exactly the digest the private build produced; the check after the copy enforces it. The signature,
         # SBOM and provenance objects of an image live next to it under the tag sha256-<hex> (an OCI index);
         # they stay valid under the new name because they sign the digest, so they are copied too.
         env:
-          SRC_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
-          DST_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
           VERSION: ${{ steps.in.outputs.version }}
           PRERELEASE: ${{ steps.in.outputs.prerelease }}
@@ -159,26 +141,25 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          src="$RUNNER_TEMP/oras-src.json" dst="$RUNNER_TEMP/oras-dst.json"
-          printf '%s' "$SRC_TOKEN" | oras login --registry-config "$src" -u x --password-stdin ghcr.io >/dev/null
-          printf '%s' "$DST_TOKEN" | oras login --registry-config "$dst" -u "$ACTOR" --password-stdin ghcr.io >/dev/null
-          trap 'rm -f "$src" "$dst"' EXIT
+          cfg="$RUNNER_TEMP/oras-config.json"
+          printf '%s' "$TOKEN" | oras login --registry-config "$cfg" -u "$ACTOR" --password-stdin ghcr.io >/dev/null
+          trap 'rm -f "$cfg"' EXIT
           copy_image() {
             local staging="$1" public="$2" digest="$3" hex tags t got
             hex="${digest#sha256:}"
-            oras cp --from-registry-config "$src" --to-registry-config "$dst" "$staging@$digest" "$public:$VERSION"
-            got=$(oras manifest fetch --registry-config "$dst" --descriptor "$public:$VERSION" | jq -r .digest)
+            oras cp --registry-config "$cfg" "$staging@$digest" "$public:$VERSION"
+            got=$(oras manifest fetch --registry-config "$cfg" --descriptor "$public:$VERSION" | jq -r .digest)
             [ "$got" = "$digest" ] || { echo "::error::$public:$VERSION is $got after the copy, expected $digest"; exit 1; }
-            tags=$(oras repo tags --registry-config "$src" "$staging" | { grep -E "^sha256-${hex}(\.[a-z0-9]+)?\$" || true; })
+            tags=$(oras repo tags --registry-config "$cfg" "$staging" | { grep -E "^sha256-${hex}(\.[a-z0-9]+)?\$" || true; })
             if [ -z "$tags" ]; then
               echo "::warning::$staging@$digest has no signature objects; the signature check below will fail unless the release is signed another way"
             fi
             for t in $tags; do
-              oras cp --from-registry-config "$src" --to-registry-config "$dst" "$staging:$t" "$public:$t"
+              oras cp --registry-config "$cfg" "$staging:$t" "$public:$t"
               echo "copied $t"
             done
             if [ "$PRERELEASE" = "false" ]; then
-              oras tag --registry-config "$dst" "$public@$digest" latest
+              oras tag --registry-config "$cfg" "$public@$digest" latest
             fi
           }
           copy_image "$STAGING_IMAGE" "$PUBLIC_IMAGE" "$SESHAT_DIGEST"
@@ -236,15 +217,43 @@ jobs:
             echo "verified signature, SBOM and provenance of $ref"
           done
 
-      - name: Download the private release's assets and verify them
+      - name: Find the release for this version
+        # The source repository stages the release as a DRAFT of this repository before it dispatches, and
+        # a draft is not reachable by tag: look it up in the list. A draft wins; otherwise a published release
+        # of the same tag means this is a re-run, which only verifies it.
+        id: rel
         env:
-          GH_TOKEN: ${{ secrets.SOURCE_READ_TOKEN || secrets.GHCR_READ_TOKEN }}
-          SOURCE_REPO: ${{ steps.in.outputs.source_repo }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.in.outputs.tag }}
         run: |
           set -euo pipefail
+          found=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
+            --jq ".[] | select(.tag_name == \"$TAG\") | \"\(.id) \(if .draft then \"draft\" else \"published\" end)\"")
+          id=$(printf '%s\n' "$found" | awk '$2 == "draft" {print $1; exit}')
+          state=draft
+          if [ -z "$id" ]; then
+            id=$(printf '%s\n' "$found" | awk '$2 == "published" {print $1; exit}')
+            state=published
+          fi
+          if [ -z "$id" ]; then
+            echo "::error::$GH_REPO has no release for $TAG: the source repository stages it as a draft before it dispatches"; exit 1
+          fi
+          echo "release $id for $TAG is $state"
+          { echo "id=$id"; echo "state=$state"; } >> "$GITHUB_OUTPUT"
+
+      - name: Download the release's assets and verify them
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ steps.rel.outputs.id }}
+        run: |
+          set -euo pipefail
           mkdir -p assets
-          gh release download "$TAG" --repo "$SOURCE_REPO" --dir assets
+          gh api --paginate "repos/$GH_REPO/releases/$RELEASE_ID/assets?per_page=100" --jq '.[] | "\(.id) \(.name)"' \
+            | while read -r aid name; do
+                gh api -H 'Accept: application/octet-stream' "repos/$GH_REPO/releases/assets/$aid" > "assets/$name"
+              done
           cd assets
           ls -la
           for f in SHA256SUMS SHA256SUMS.sig cosign.pub; do
@@ -292,35 +301,34 @@ jobs:
           [ "$fail" -eq 0 ] || exit 1
           echo "verified $(find . -type f | wc -l) assets against the signed SHA256SUMS"
 
-      - name: Cut the GitHub Release
-        # Created as a draft, filled, checked, then published: nobody sees a half-uploaded release.
+      - name: Publish the release
+        # The draft holds exactly the verified assets (checked here), so publishing it shows nobody a half-uploaded
+        # release. A release that is already published is left as it is: the checks above are its verification.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ steps.rel.outputs.id }}
+          STATE: ${{ steps.rel.outputs.state }}
           TAG: ${{ steps.in.outputs.tag }}
           VERSION: ${{ steps.in.outputs.version }}
           PRERELEASE: ${{ steps.in.outputs.prerelease }}
           HEAD_SHA: ${{ steps.in.outputs.head }}
         run: |
           set -euo pipefail
-          title="Seshat $VERSION"
-          flags=()
-          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            # A re-run: replace the assets, keep the tag.
-            gh release view "$TAG" --json assets -q '.assets[].name' | while read -r a; do
-              [ -n "$a" ] && gh release delete-asset "$TAG" "$a" --yes
-            done
-            gh release edit "$TAG" --title "$title" --notes "" --prerelease="$PRERELEASE"
-            gh release upload "$TAG" assets/* --clobber
+          names=$(gh api --paginate "repos/$GH_REPO/releases/$RELEASE_ID/assets?per_page=100" --jq '.[].name' | sort)
+          want=$(cd assets && printf '%s\n' * | sort)
+          [ "$names" = "$want" ] || { echo "::error::the release does not hold exactly the verified assets"; exit 1; }
+          if [ "$STATE" = "published" ]; then
+            echo "$TAG is already published; its assets match the signed checksums, nothing to change"
           else
-            gh release create "$TAG" assets/* --draft --target "$HEAD_SHA" --title "$title" --notes "" "${flags[@]}"
-            names=$(gh release view "$TAG" --json assets -q '.assets[].name' | sort)
-            want=$(cd assets && printf '%s\n' * | sort)
-            [ "$names" = "$want" ] || { echo "::error::the draft release does not hold exactly the verified assets"; exit 1; }
-            if [ "$PRERELEASE" = "false" ]; then flags=(--latest); else flags=(); fi
-            gh release edit "$TAG" --draft=false --prerelease="$PRERELEASE" "${flags[@]}"
+            latest=false
+            if [ "$PRERELEASE" = "false" ]; then latest=true; fi
+            # target_commitish only matters when the tag does not exist yet: it then names this commit.
+            gh api -X PATCH "repos/$GH_REPO/releases/$RELEASE_ID" \
+              -f name="Seshat $VERSION" -f body="" -f target_commitish="$HEAD_SHA" \
+              -F draft=false -F prerelease="$PRERELEASE" -f make_latest="$latest" >/dev/null
           fi
-          echo "Released $TAG: $(gh release view "$TAG" --json url -q .url)"
+          echo "Released $TAG: https://github.com/$GH_REPO/releases/tag/$TAG"
 
       - name: Verify the public release anonymously
         env:
