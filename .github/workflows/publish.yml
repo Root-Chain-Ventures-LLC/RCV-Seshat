@@ -60,6 +60,8 @@ env:
   PUBLIC_IMAGE: ghcr.io/root-chain-ventures-llc/seshat
   PUBLIC_PORTAL_IMAGE: ghcr.io/root-chain-ventures-llc/seshat-device-tracker
   # cosign, pinned: the release is downloaded from GitHub and refused unless it matches this SHA-256.
+  ORAS_VERSION: '1.3.5'
+  ORAS_SHA256: 'f48a73ea6d026a862c3919fc773da9a8c86fc259c2c737d5baed3b8b9614ad22'
   COSIGN_VERSION: '3.1.4'
   COSIGN_SHA256: '424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa'
 
@@ -124,54 +126,59 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Publishing $VERSION (prerelease=$PRERELEASE, source ${SOURCE_SHA:-unknown}) from $SOURCE_REPO"
 
-      - name: Install skopeo and cosign
+      - name: Install oras and cosign
         run: |
           set -euo pipefail
-          if ! command -v skopeo >/dev/null 2>&1; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq skopeo
-          fi
-          skopeo --version
-          mkdir -p "$RUNNER_TEMP/bin"
+          mkdir -p "$RUNNER_TEMP/bin" "$RUNNER_TEMP/dl"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/dl/oras.tgz" \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          echo "${ORAS_SHA256}  $RUNNER_TEMP/dl/oras.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/dl/oras.tgz" -C "$RUNNER_TEMP/bin" oras
+          oras version | head -1
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/bin/cosign" \
             "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
           echo "${COSIGN_SHA256}  $RUNNER_TEMP/bin/cosign" | sha256sum -c -
-          chmod 0755 "$RUNNER_TEMP/bin/cosign"
+          chmod 0755 "$RUNNER_TEMP/bin/cosign" "$RUNNER_TEMP/bin/oras"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Copy the images by digest to the public names, with their signatures
         # Two credentials against one registry: the read token can see the private staging packages,
-        # GITHUB_TOKEN owns the public ones. --preserve-digests makes skopeo fail rather than rewrite a
-        # manifest, so what users pull is byte for byte what the private build produced. The signature,
-        # SBOM and provenance objects of an image are stored next to it under tags derived from its digest
-        # (sha256-<hex>, sha256-<hex>.sig, sha256-<hex>.att, ...); they stay valid under the new name because
-        # they sign the digest, so they are copied too.
+        # GITHUB_TOKEN owns the public ones (so the packages are created by and linked to this repository).
+        # oras copies manifests and indexes byte for byte (no media-type conversion), so what users pull has
+        # exactly the digest the private build produced; the check after the copy enforces it. The signature,
+        # SBOM and provenance objects of an image live next to it under the tag sha256-<hex> (an OCI index);
+        # they stay valid under the new name because they sign the digest, so they are copied too.
         env:
-          SRC_CREDS: x:${{ secrets.GHCR_READ_TOKEN }}
-          DST_CREDS: ${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}
+          SRC_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+          DST_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
           VERSION: ${{ steps.in.outputs.version }}
           PRERELEASE: ${{ steps.in.outputs.prerelease }}
           SESHAT_DIGEST: ${{ steps.in.outputs.seshat_digest }}
           TRACKER_DIGEST: ${{ steps.in.outputs.tracker_digest }}
         run: |
           set -euo pipefail
+          umask 077
+          src="$RUNNER_TEMP/oras-src.json" dst="$RUNNER_TEMP/oras-dst.json"
+          printf '%s' "$SRC_TOKEN" | oras login --registry-config "$src" -u x --password-stdin ghcr.io >/dev/null
+          printf '%s' "$DST_TOKEN" | oras login --registry-config "$dst" -u "$ACTOR" --password-stdin ghcr.io >/dev/null
+          trap 'rm -f "$src" "$dst"' EXIT
           copy_image() {
-            local staging="$1" public="$2" digest="$3" hex tags t
+            local staging="$1" public="$2" digest="$3" hex tags t got
             hex="${digest#sha256:}"
-            skopeo copy --all --preserve-digests --src-creds "$SRC_CREDS" --dest-creds "$DST_CREDS" \
-              "docker://$staging@$digest" "docker://$public:$VERSION"
-            tags=$(skopeo list-tags --creds "$SRC_CREDS" "docker://$staging" | jq -r '.Tags[]' | grep -E "^sha256-${hex}(\.[a-z0-9]+)?\$" || true)
+            oras cp --from-registry-config "$src" --to-registry-config "$dst" "$staging@$digest" "$public:$VERSION"
+            got=$(oras manifest fetch --registry-config "$dst" --descriptor "$public:$VERSION" | jq -r .digest)
+            [ "$got" = "$digest" ] || { echo "::error::$public:$VERSION is $got after the copy, expected $digest"; exit 1; }
+            tags=$(oras repo tags --registry-config "$src" "$staging" | { grep -E "^sha256-${hex}(\.[a-z0-9]+)?\$" || true; })
             if [ -z "$tags" ]; then
               echo "::warning::$staging@$digest has no signature objects; the signature check below will fail unless the release is signed another way"
             fi
             for t in $tags; do
-              skopeo copy --all --preserve-digests --src-creds "$SRC_CREDS" --dest-creds "$DST_CREDS" \
-                "docker://$staging:$t" "docker://$public:$t"
+              oras cp --from-registry-config "$src" --to-registry-config "$dst" "$staging:$t" "$public:$t"
               echo "copied $t"
             done
             if [ "$PRERELEASE" = "false" ]; then
-              skopeo copy --all --preserve-digests --src-creds "$DST_CREDS" --dest-creds "$DST_CREDS" \
-                "docker://$public@$digest" "docker://$public:latest"
+              oras tag --registry-config "$dst" "$public@$digest" latest
             fi
           }
           copy_image "$STAGING_IMAGE" "$PUBLIC_IMAGE" "$SESHAT_DIGEST"
