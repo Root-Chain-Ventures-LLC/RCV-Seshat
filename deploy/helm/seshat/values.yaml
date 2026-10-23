@@ -1,0 +1,299 @@
+# Seshat Helm chart values. Documented walkthrough: docs/kubernetes.md.
+#
+# Minimum to install (everything else has a working default):
+#   kubectl create secret generic seshat --from-literal=SESHAT_SECRET_KEY="$(openssl rand -hex 32)"
+#   kubectl create secret generic seshat-db --from-literal=SESHAT_DATABASE_URL='postgres://seshat:CHANGE_ME@db.example.com:5432/seshat?sslmode=verify-full'
+#   helm install seshat deploy/helm/seshat --set secrets.existingSecret=seshat --set database.external.existingSecret=seshat-db
+# The chart never creates or stores secrets.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  # The Seshat image. Mirror it into your own registry and change this if the cluster cannot reach ghcr.io.
+  repository: ghcr.io/root-chain-ventures-llc/seshat
+  # Defaults to the chart's appVersion. Prefer a digest in production.
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+secrets:
+  # Secret holding SESHAT_SECRET_KEY (at least 32 bytes). REQUIRED. Changing the key makes every stored
+  # destination credential unreadable, so keep it across upgrades and restores.
+  existingSecret: ""
+  secretKeyKey: SESHAT_SECRET_KEY
+
+database:
+  # external : PostgreSQL you run (a Secret with the URL). Recommended on Kubernetes.
+  # cnpg     : a CloudNativePG cluster YOU created (see deploy/k8s/examples/cloudnativepg/); the chart only
+  #            reads its connection Secret and never manages the Cluster.
+  # none     : embedded SQLite on each pod's volume. One replica, or independent replicas (see allowReplicatedSqlite).
+  mode: external
+  external:
+    existingSecret: ""
+    key: SESHAT_DATABASE_URL
+  cnpg:
+    clusterName: seshat-db
+    # CloudNativePG writes <cluster>-app with the key "uri". Override only if you renamed them.
+    secretName: ""
+    key: uri
+  # replicaCount > 1 with mode "none" gives every replica its own database and configuration. Refused
+  # unless you accept that here.
+  allowReplicatedSqlite: false
+
+migrate:
+  # Helm pre-install / pre-upgrade hook Job: `seshat store migrate`, so pods never race the migrations.
+  enabled: true
+  backoffLimit: 6
+  activeDeadlineSeconds: 900
+
+roles:
+  # false: one StatefulSet runs every role (UI, API and the telemetry listeners).
+  # true : the StatefulSet runs only the collector role (listeners), and a separate Deployment runs the
+  #        console role (UI and API). Needs PostgreSQL.
+  split: false
+
+replicaCount: 1
+console:
+  replicaCount: 2
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}
+
+logLevel: info
+
+leaderElection:
+  # auto       : follow the database (the PostgreSQL advisory lock whenever a URL is set).
+  # postgres   : the same, explicit.
+  # k8s-lease  : a coordination.k8s.io/v1 Lease (needs the Role the chart creates; useful when the
+  #              database is reached through a transaction pooler or you prefer the API server as arbiter).
+  mode: auto
+  leaseName: ""
+
+queue:
+  # Outbound destination queues live under /data/queue. By default each pod gets its own PersistentVolumeClaim,
+  # so a restarted pod resumes its queue. The optional shared bus removes the "queue unavailable while the pod
+  # is down" limit; with it enabled the pods are stateless (emptyDir) and need no PVC.
+  bus:
+    enabled: false
+    existingSecret: ""
+    key: SESHAT_QUEUE_BUS_URL
+    # SESHAT_QUEUE_BUS_MODE: "" (default) renders `only`, because with the bus on the pods are stateless
+    # (an emptyDir /data, no PVC): events are published straight to the bus and the local queue is only the
+    # fallback while the bus is unreachable. `hybrid` keeps the local queue as a write-ahead buffer in front of
+    # the bus (it survives a container restart, not a pod reschedule); `off` keeps the bus configured but unused.
+    mode: ""
+  # The chart also sets SESHAT_DATA_EPHEMERAL=1 whenever /data does not survive a pod (persistence.enabled=false,
+  # or the bus is on and /data is an emptyDir). Without a bus behind it Seshat then logs an error at start and
+  # GET /api/queue lists the warning: queued events are lost with the pod.
+
+persistence:
+  enabled: true
+  size: 10Gi            # plan for the sum of the per-destination queue limits (1 GiB each by default)
+  storageClass: ""
+  accessModes: [ReadWriteOnce]
+  retentionWhenDeleted: Retain
+  retentionWhenScaled: Retain
+
+# Telemetry intake: SNMP traps, syslog and flows.
+intake:
+  service:
+    enabled: true
+    # LoadBalancer is the supported way to receive telemetry on the standard ports. NodePort is accepted for
+    # clusters with an external balancer; ClusterIP exposes nothing outside the cluster.
+    type: LoadBalancer
+    # Local is REQUIRED for correct operation. Seshat identifies a device by the source address of its
+    # datagrams. With externalTrafficPolicy: Cluster, kube-proxy rewrites the source to a node address (SNAT)
+    # whenever it forwards a packet to a pod on another node, so every sender looks like the same few node
+    # addresses: enrichment, the device knowledge base, per-sender rate limits and per-sender state are all
+    # wrong. Local sends traffic only to pods on the node that received it and keeps the original source.
+    # The cost: the load balancer must health-check nodes (kube-proxy exposes healthCheckNodePort), and you
+    # spread pods over nodes (topologySpread below) so every receiving node has a pod.
+    externalTrafficPolicy: Local
+    # Fixed address for the senders to target. Prefer the MetalLB annotation below on current MetalLB.
+    loadBalancerIP: ""
+    loadBalancerClass: ""
+    # Who may reach the telemetry Service: the CIDRs of your device networks (and of your edge collectors).
+    # Empty means "whatever the load balancer allows", i.e. possibly the whole internet for a cloud balancer.
+    # The cluster honours it only when the balancer implements loadBalancerSourceRanges (MetalLB does not: use
+    # a NetworkPolicy or the upstream firewall, deploy/k8s/examples/networkpolicy.yaml).
+    loadBalancerSourceRanges: []
+    healthCheckNodePort: null
+    # One Service for UDP and TCP (needs MixedProtocolLBService, GA in Kubernetes 1.26 and supported by MetalLB),
+    # or split: two Services (<name>-intake-udp, <name>-intake-tcp) that share an address through an annotation,
+    # for balancers that cannot mix protocols.
+    split: false
+    # Examples (MetalLB):
+    #   metallb.io/address-pool: telemetry
+    #   metallb.io/loadBalancerIPs: 192.0.2.10
+    #   metallb.io/allow-shared-ip: seshat      (with split: true, on both Services; use the same value)
+    annotations: {}
+  # Service port (what devices send to) per input. The container ports are fixed (1162 traps, 1514 syslog,
+  # 2055, 4739, 6343, 57400/tcp) unless hostNetwork.standardPorts is on.
+  ports:
+    snmpTrap: {port: 162}
+    syslogUDP: {enabled: true, port: 514}
+    syslogTCP: {enabled: true, port: 514}
+    syslogTLS: {enabled: false, port: 6514}
+    netflow: {enabled: true, port: 2055}
+    ipfix: {enabled: true, port: 4739}
+    sflow: {enabled: true, port: 6343}
+    # Streaming-telemetry dial-out (Cisco MDT, Juniper, gNMI dial-out): gRPC over TCP, container port 57400.
+    telemetryDialout: {enabled: true, port: 57400}
+  syslogTLS:
+    # Secret with tls.crt, tls.key (and ca.crt when clientCA is true), mounted at /tls.
+    existingSecret: ""
+    clientCA: false
+  # Sites without a load balancer: run the pods on the host network. Source addresses are never rewritten
+  # because there is no Service in the path. Trade-offs: one pod per node (enforced), the node's ports are
+  # taken, no Service load balancing (senders target a node address, or you add keepalived/BGP), NetworkPolicy
+  # does not apply to host-network pods. The 162 and 514 ports are privileged: with standardPorts the container
+  # runs as root with only NET_BIND_SERVICE; without it Seshat listens on 1162 and 1514 and you redirect 162
+  # and 514 on the node.
+  hostNetwork:
+    enabled: false
+    standardPorts: false
+  # Startup check: report on /api/ready (check "source_ip") and the Dashboard when senders arrive from an
+  # address that can only be a rewriting hop. The node's own address is always included; add the node subnet(s)
+  # and the load balancer's SNAT pool here. The check informs, it never marks the pod unready.
+  sourceIPCheck:
+    enabled: true
+    snatCIDRs: []
+
+# UI and API.
+ui:
+  containerPort: 8080
+  cookieSecure: auto          # auto | always | never
+  publicURL: ""               # external URL, used for SSO redirects
+  service:
+    type: ClusterIP
+    port: 80
+    annotations: {}
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: seshat.example.com
+        paths:
+          - {path: /, pathType: Prefix}
+    # TLS from a Secret that already exists (kubernetes.io/tls):
+    # tls:
+    #   - secretName: seshat-tls
+    #     hosts: [seshat.example.com]
+    tls: []
+
+# Needs CAP_NET_RAW (an NMS destination with preserve_source): the container then runs as root with every
+# other capability dropped, as docs/outputs.md describes.
+nms:
+  preserveSource: false
+
+# Device Tracker: pollers spread over the replicas by ordinal (SESHAT_TRACKER_SHARD=<ordinal>/<replicas>).
+# Changing replicaCount rolls the pods, which re-shards. Needs the Device Tracker.
+tracker:
+  shardByOrdinal: false
+
+# The Device Tracker portal (second app, separate image).
+portal:
+  enabled: false
+  # shared : the same PostgreSQL as Seshat, live data, no sync (default on Kubernetes).
+  # push   : Seshat pushes data to the portal's own store (a PVC, or portal.database).
+  # api    : the portal calls Seshat's /api/tracker/* with a token.
+  # db     : a read-only PostgreSQL role over the tracker_public views (deploy/postgres/tracker_public_role.sql).
+  mode: shared
+  image:
+    repository: ghcr.io/root-chain-ventures-llc/seshat-device-tracker
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  publicURL: ""
+  secrets:
+    existingSecret: ""   # Secret with SESHAT_SECRET_KEY; default: secrets.existingSecret (required to match in shared mode)
+  # Optional read-only role for shared mode, required for db mode (SESHAT_PORTAL_DB_URL).
+  readOnlyDatabase:
+    existingSecret: ""
+    key: SESHAT_PORTAL_DB_URL
+  # push/api/db: the portal's own PostgreSQL (SESHAT_DATABASE_URL). Empty = SQLite on a PVC (one replica).
+  database:
+    existingSecret: ""
+    key: SESHAT_DATABASE_URL
+  api:
+    url: ""
+    existingSecret: ""   # Secret with SESHAT_PORTAL_API_TOKEN
+    key: SESHAT_PORTAL_API_TOKEN
+  sync:
+    existingSecret: ""   # optional Secret with SESHAT_PORTAL_SYNC_TOKEN (push mode)
+    key: SESHAT_PORTAL_SYNC_TOKEN
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: tracker.example.com
+        paths:
+          - {path: /, pathType: Prefix}
+    tls: []
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 512Mi}
+  extraEnv: []
+  # e.g. a Secret with SESHAT_PORTAL_ADMIN_EMAIL / SESHAT_PORTAL_ADMIN_PASSWORD and SESHAT_OIDC_* settings.
+  extraEnvFrom: []
+
+# Graceful stop. preStop runs `seshat --drain`: /api/ready answers 503 (the Service and the balancer's health
+# check stop sending), the call waits for the destination queues to flush (at most timeoutSeconds), then holds for
+# holdSeconds so a balancer health check notices before SIGTERM. The process then flushes and exits.
+drain:
+  timeoutSeconds: 25
+  holdSeconds: 10
+# Must cover drain.timeoutSeconds + drain.holdSeconds + 20 s of shutdown.
+terminationGracePeriodSeconds: 70
+
+pdb:
+  enabled: true
+  maxUnavailable: 1
+  minAvailable: null
+
+topologySpread:
+  enabled: true
+  maxSkew: 1
+  topologyKey: kubernetes.io/hostname
+  # DoNotSchedule makes "one receiving node = one pod" a hard rule, which externalTrafficPolicy: Local needs.
+  whenUnsatisfiable: ScheduleAnyway
+
+resources:
+  requests: {cpu: 250m, memory: 512Mi}
+  limits: {memory: 2Gi}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+extraEnv: []
+extraEnvFrom: []
+extraVolumes: []
+extraVolumeMounts: []
+
+monitoring:
+  # Needs the Prometheus Operator CRDs. Scrapes GET /metrics on every pod.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    # /metrics needs authentication. A Secret holding SESHAT_METRICS_TOKEN (at least 32 characters): the
+    # ServiceMonitor presents it as a bearer token and the pods read the same Secret through extraEnvFrom.
+    tokenSecret: {}        # {name: seshat-metrics, key: SESHAT_METRICS_TOKEN}

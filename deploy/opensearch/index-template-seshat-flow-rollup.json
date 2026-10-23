@@ -1,0 +1,217 @@
+{
+  "index_patterns": [
+    "logs-seshat.flow_rollup-*"
+  ],
+  "data_stream": {},
+  "priority": 200,
+  "version": 1,
+  "composed_of": [
+    "seshat-core"
+  ],
+  "_meta": {
+    "managed_by": "seshat",
+    "seshat_schema_version": "1.0",
+    "ecs_version": "8.11.0",
+    "description": "Seshat seshat.flow_rollup data streams: one-minute flow roll-ups (top talkers, per-interface, per-application)."
+  },
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": 1,
+        "number_of_replicas": 1
+      }
+    },
+    "mappings": {
+      "properties": {
+        "source": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "long"
+            },
+            "mac": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "bytes": {
+              "type": "long"
+            },
+            "packets": {
+              "type": "long"
+            },
+            "as": {
+              "properties": {
+                "number": {
+                  "type": "long"
+                },
+                "organization": {
+                  "properties": {
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                }
+              }
+            },
+            "geo": {
+              "properties": {
+                "country_iso_code": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "city_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "location": {
+                  "type": "geo_point"
+                }
+              }
+            }
+          }
+        },
+        "destination": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "long"
+            },
+            "mac": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "bytes": {
+              "type": "long"
+            },
+            "packets": {
+              "type": "long"
+            },
+            "as": {
+              "properties": {
+                "number": {
+                  "type": "long"
+                },
+                "organization": {
+                  "properties": {
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                }
+              }
+            },
+            "geo": {
+              "properties": {
+                "country_iso_code": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "city_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "location": {
+                  "type": "geo_point"
+                }
+              }
+            }
+          }
+        },
+        "network": {
+          "properties": {
+            "transport": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "iana_number": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "protocol": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "application": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "direction": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "bytes": {
+              "type": "long"
+            },
+            "packets": {
+              "type": "long"
+            },
+            "vlan": {
+              "properties": {
+                "id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        },
+        "seshat": {
+          "dynamic": false,
+          "properties": {
+            "flow": {
+              "properties": {
+                "exporter": {
+                  "type": "ip"
+                }
+              }
+            },
+            "rollup": {
+              "properties": {
+                "kind": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "interval_seconds": {
+                  "type": "long"
+                },
+                "flows": {
+                  "type": "long"
+                },
+                "rank": {
+                  "type": "long"
+                },
+                "top_n": {
+                  "type": "long"
+                },
+                "if_index": {
+                  "type": "long"
+                },
+                "if_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "direction": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "other": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

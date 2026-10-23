@@ -1,0 +1,75 @@
+# Example NetworkPolicy for the collector pods. Not installed by the chart (policy needs your CNI, your
+# ingress controller's namespace and your destinations). With externalTrafficPolicy: Local the policy sees
+# the real sender address, so the intake rule can name your device networks.
+# Does not apply to pods running with intake.hostNetwork.enabled (host networking bypasses policy).
+# Apply seshat-default-deny (below) first in a namespace that has no other policy: with it, only what the
+# policies in this file allow reaches the pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: seshat-collector
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: seshat
+      app.kubernetes.io/component: collector
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Telemetry from the device networks.
+    - from:
+        - ipBlock: {cidr: 198.51.100.0/24}
+        - ipBlock: {cidr: 203.0.113.0/24}
+      ports:
+        - {protocol: UDP, port: 1162}
+        - {protocol: UDP, port: 1514}
+        - {protocol: TCP, port: 1514}
+        - {protocol: UDP, port: 2055}
+        - {protocol: UDP, port: 4739}
+        - {protocol: UDP, port: 6343}
+        - {protocol: TCP, port: 57400}
+        # Syslog over TLS (intake.ports.syslogTLS / SESHAT_SYSLOG_TLS_LISTEN); drop the line when it is off.
+        - {protocol: TCP, port: 6514}
+    # Edge collectors (mutual TLS) dial the dedicated edge listener (SESHAT_EDGE_LISTEN); name the edges' networks
+    # here, or drop the rule when no edge is used.
+    - from:
+        - ipBlock: {cidr: 203.0.113.0/24}
+      ports:
+        - {protocol: TCP, port: 8443}
+    # UI, API and metrics from the ingress controller and the monitoring namespace.
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}
+      ports:
+        - {protocol: TCP, port: 8080}
+    # The kubelet's probes come from the node; most CNIs always allow them. If yours does not, add the node CIDR here.
+  egress:
+    # DNS.
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    # PostgreSQL.
+    - to:
+        - podSelector: {matchLabels: {cnpg.io/cluster: seshat-db}}
+      ports:
+        - {protocol: TCP, port: 5432}
+    # Kubernetes API (Lease leader election only; drop this rule when leaderElection.mode is not k8s-lease).
+    # Use the ClusterIP of the "kubernetes" Service in the default namespace (kubectl get svc kubernetes -n default);
+    # 10.96.0.1 is only the common default. Some CNIs need the API server's node addresses instead.
+    - to:
+        - ipBlock: {cidr: 10.96.0.1/32}
+      ports:
+        - {protocol: TCP, port: 443}
+    # Destinations: your Logstash / OpenSearch / Kafka / NMS addresses.
+    - to:
+        - ipBlock: {cidr: 192.0.2.0/24}
+---
+# Default deny for every pod in the namespace: nothing gets in or out unless a policy allows it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: seshat-default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]

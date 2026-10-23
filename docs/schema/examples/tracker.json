@@ -1,0 +1,62 @@
+{
+  "@timestamp": "2026-10-12T14:03:07.100Z",
+  "ecs": { "version": "8.11.0" },
+  "data_stream": { "type": "logs", "dataset": "seshat.tracker", "namespace": "exo" },
+  "event": {
+    "kind": "event",
+    "category": ["network"],
+    "type": ["info"],
+    "action": "interval-extended",
+    "dataset": "seshat.tracker",
+    "module": "seshat",
+    "id": "01K7XEXAMPLE0TRACKER0001",
+    "created": "2026-10-12T14:03:07.120Z",
+    "severity": 6
+  },
+  "observer": {
+    "vendor": "Example Org",
+    "product": "Seshat",
+    "version": "0.1.0",
+    "name": "collector-1.example.com",
+    "type": "gateway"
+  },
+  "related": { "ip": ["192.0.2.57"], "hosts": ["laptop-17.example.com"], "user": ["jdoe"] },
+  "seshat": {
+    "schema_version": "1.0",
+    "source": { "listener": "poller-access-switches", "input": "poller", "site": "example-site-a" },
+    "device": {
+      "status": "known",
+      "id": "dev-0003",
+      "name": "Example Switch 3",
+      "site": "example-site-a",
+      "role": "access-switch",
+      "interface": { "name": "GigabitEthernet1/0/14", "index": 10114, "alias": "Room 214 jack J-214" }
+    },
+    "enrichment": { "level": "full", "sources": ["inventory"] },
+    "tracker": {
+      "fact": "location",
+      "source": "trap",
+      "observed_at": "2026-10-12T14:03:06.000Z",
+      "first_seen": "2026-10-12T09:41:00.000Z",
+      "last_seen": "2026-10-12T14:03:06.000Z",
+      "interval_id": "iv-loc-000417",
+      "confidence": 0.9,
+      "mac": "02:00:5e:20:00:07",
+      "ip": "192.0.2.57",
+      "vrf": "default",
+      "hostname": "laptop-17.example.com",
+      "user": "jdoe",
+      "oui_vendor": "Example NIC Maker",
+      "device_type": "laptop",
+      "randomized_mac": true,
+      "location": {
+        "site": "example-site-a",
+        "device": "Example Switch 3",
+        "port": "GigabitEthernet1/0/14",
+        "ifindex": 10114,
+        "vlan": 120,
+        "trace": ["Panel P2/14", "Jack J-214", "Room 214"]
+      }
+    }
+  }
+}

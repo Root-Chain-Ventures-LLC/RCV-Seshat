@@ -1,0 +1,69 @@
+# Seshat: UI and API on 127.0.0.1:8080, SNMP traps on host 162/udp, syslog on host 514, flows on 2055 / 4739 / 6343 (udp).
+#   cp .env.example .env
+#   echo "SESHAT_SECRET_KEY=$(openssl rand -base64 48)" >> .env
+#   docker compose up -d
+#
+# Production defaults (docs/hardening.md):
+# - Not in development mode. A secret key is REQUIRED: SESHAT_SECRET_KEY in .env (generate one with
+#   `openssl rand -base64 48`) or a key file, see compose.keyfile.yaml. The container refuses to start
+#   without one and says so in `docker compose logs seshat`. For a throwaway evaluation only:
+#   SESHAT_DEV=1 in .env generates a key INTO the data volume (and logs a warning on every start).
+# - The UI/API is published on the loopback interface only: it speaks plain HTTP. Put a TLS reverse proxy
+#   in front (Caddy and nginx examples in docs/hardening.md) and let it reach 127.0.0.1:8080, or, on a
+#   private management network, set SESHAT_BIND=<that interface's address> in .env.
+# - The plaintext gRPC dial-out port (57400/tcp) is NOT published; add compose.telemetry.yaml to use it.
+# - The container runs as uid 65532 with a read-only root file system, no capabilities, no new privileges.
+#   The only writable paths are the /data volume and a tmpfs /tmp. Traps and syslog listen on 1162/1514
+#   inside the container and Docker maps host 162/514 to them, so no capability is needed to bind.
+name: seshat
+
+# Applied to every service below (YAML anchors do not cross files, so each compose file repeats it).
+x-hardened: &hardened
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 512
+  # Resource limits are workload specific, so none is forced. Example for a mid-size deployment, paired
+  # with a Go soft limit below the container limit (GOMEMLIMIT in .env):
+  # mem_limit: 2g
+  # cpus: "2"
+
+services:
+  seshat:
+    <<: *hardened
+    image: ${SESHAT_IMAGE:-ghcr.io/root-chain-ventures-llc/seshat:0.2.0}
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Production unless .env says SESHAT_DEV=1 (evaluation only).
+      SESHAT_DEV: ${SESHAT_DEV:-0}
+    ports:
+      # UI and API (plain HTTP): loopback only by default. Behind a TLS proxy on this host keep it;
+      # to publish on one specific private address set SESHAT_BIND in .env. Avoid 0.0.0.0 without TLS.
+      - "${SESHAT_BIND:-127.0.0.1}:8080:8080"
+      # Devices send here, so these listen on every interface. Restrict who can reach them with the host
+      # firewall (allow only your device networks); see docs/hardening.md "Listener exposure".
+      - "162:1162/udp"
+      - "514:1514/udp"
+      - "514:1514/tcp"
+      # Flows: NetFlow v5/v9 on 2055, IPFIX on 4739, sFlow on 6343 (any socket decodes any version).
+      - "2055:2055/udp"
+      - "4739:4739/udp"
+      - "6343:6343/udp"
+      # Streaming telemetry dial-out (57400/tcp) is plaintext unless SESHAT_TELEMETRY_TLS_CERT/KEY are set,
+      # so it is not published here: add compose.telemetry.yaml when devices need it.
+      # Syslog over TLS (RFC 5425): set SESHAT_SYSLOG_TLS_LISTEN=:6514 and the cert/key in .env, mount them, then:
+      # - "6514:6514/tcp"
+      # Edge collectors (mutual TLS, docs/edge.md): set SESHAT_EDGE_LISTEN=:8443 (and SESHAT_EDGE_HOSTS), then:
+      # - "8443:8443/tcp"
+    volumes:
+      - seshat-data:/data
+
+volumes:
+  seshat-data:

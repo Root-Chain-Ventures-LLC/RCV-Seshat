@@ -1,0 +1,356 @@
+{
+  "version": 1,
+  "_meta": {
+    "managed_by": "seshat",
+    "seshat_schema_version": "1.0",
+    "ecs_version": "8.11.0",
+    "description": "Seshat common schema: ECS core fields plus seshat.schema_version, seshat.source, seshat.device, seshat.enrichment, seshat.route. Composed into every Seshat index template."
+  },
+  "template": {
+    "settings": {
+      "index": {
+        "codec": "best_compression",
+        "refresh_interval": "5s",
+        "mapping": {
+          "ignore_malformed": true
+        }
+      }
+    },
+    "mappings": {
+      "dynamic_templates": [
+        {
+          "strings_as_keyword": {
+            "match_mapping_type": "string",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        }
+      ],
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "ecs": {
+          "properties": {
+            "version": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "data_stream": {
+          "properties": {
+            "type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "dataset": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "namespace": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "message": {
+          "type": "text"
+        },
+        "tags": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "labels": {
+          "type": "flat_object"
+        },
+        "error": {
+          "properties": {
+            "message": {
+              "type": "text"
+            },
+            "code": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "event": {
+          "properties": {
+            "kind": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "category": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "action": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "dataset": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "module": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "created": {
+              "type": "date"
+            },
+            "ingested": {
+              "type": "date"
+            },
+            "original": {
+              "type": "keyword",
+              "index": false,
+              "doc_values": false
+            },
+            "severity": {
+              "type": "long"
+            },
+            "code": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "outcome": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "start": {
+              "type": "date"
+            },
+            "end": {
+              "type": "date"
+            },
+            "duration": {
+              "type": "long"
+            }
+          }
+        },
+        "observer": {
+          "properties": {
+            "vendor": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "product": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "version": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "ip": {
+              "type": "ip"
+            }
+          }
+        },
+        "host": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "ip": {
+              "type": "ip"
+            },
+            "mac": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "related": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "hosts": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "user": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "seshat": {
+          "dynamic": false,
+          "properties": {
+            "schema_version": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "source": {
+              "properties": {
+                "listener": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "input": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "protocol": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "ip": {
+                  "type": "ip"
+                },
+                "port": {
+                  "type": "long"
+                },
+                "site": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "vrf": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "edge": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "device": {
+              "properties": {
+                "status": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "vendor": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "model": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "os": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "os_version": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "serial": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "site": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "role": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "tenant": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "tags": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "pack": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "custom": {
+                  "type": "flat_object"
+                },
+                "first_seen": {
+                  "type": "date"
+                },
+                "last_seen": {
+                  "type": "date"
+                },
+                "interface": {
+                  "properties": {
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "index": {
+                      "type": "long"
+                    },
+                    "alias": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                }
+              }
+            },
+            "enrichment": {
+              "properties": {
+                "level": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "sources": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "kb_observed_at": {
+                  "type": "date"
+                },
+                "backfilled": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "route": {
+              "properties": {
+                "matched": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "destinations": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

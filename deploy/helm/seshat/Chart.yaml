@@ -1,0 +1,11 @@
+apiVersion: v2
+name: seshat
+description: Network telemetry gateway (SNMP traps, syslog, flows) with the Device Tracker portal; high-availability mode 4 on Kubernetes.
+type: application
+version: 0.2.0
+appVersion: "0.2.0"
+kubeVersion: ">=1.27.0-0"
+keywords: [snmp, syslog, netflow, ipfix, sflow, telemetry]
+annotations:
+  # Validated with helm lint and helm template | kubeconform -strict.
+  category: Monitoring

@@ -1,0 +1,36 @@
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "seshat.fullname" . }}
+  labels:
+    {{- include "seshat.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      metrics: "true"
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace | quote }}]
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout }}
+      {{- with .Values.monitoring.serviceMonitor.tokenSecret }}
+      {{- if .name }}
+      # /metrics needs authentication: the bearer token is SESHAT_METRICS_TOKEN, which the pods must
+      # also receive (extraEnvFrom with the same Secret).
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .name | quote }}
+          key: {{ .key | default "SESHAT_METRICS_TOKEN" | quote }}
+      {{- end }}
+      {{- end }}
+  # One target per pod (the headless Service), labelled with the pod name.
+  podTargetLabels: ["app.kubernetes.io/component"]
+{{- end }}

@@ -1,0 +1,97 @@
+{{- $split := .Values.roles.split }}
+{{- $uiComponent := ternary "console" "collector" $split }}
+{{- /* Headless Service of the StatefulSet: stable pod names and the metrics target. */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "seshat.fullname" . }}-headless
+  labels:
+    {{- include "seshat.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+    metrics: "true"
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    {{- include "seshat.selector" (list . "collector") | nindent 4 }}
+  ports:
+    - {name: http, port: {{ .Values.ui.containerPort }}, targetPort: http, protocol: TCP}
+---
+{{- /* UI and API: ClusterIP, fronted by the Ingress. Never carries telemetry. */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "seshat.fullname" . }}-ui
+  labels:
+    {{- include "seshat.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ $uiComponent }}
+    {{- if $split }}
+    metrics: "true"
+    {{- end }}
+  {{- with .Values.ui.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.ui.service.type }}
+  selector:
+    {{- include "seshat.selector" (list . $uiComponent) | nindent 4 }}
+  ports:
+    - {name: http, port: {{ .Values.ui.service.port }}, targetPort: http, protocol: TCP}
+{{- if and .Values.intake.service.enabled (not .Values.intake.hostNetwork.enabled) }}
+{{- /* Telemetry intake. externalTrafficPolicy: Local keeps the sender's source address (see NOTES.txt). */}}
+{{- $ports := include "seshat.intakePorts" . | fromJsonArray }}
+{{- $groups := list (dict "suffix" "intake" "protos" (list "UDP" "TCP")) }}
+{{- if .Values.intake.service.split }}
+{{- $groups = list (dict "suffix" "intake-udp" "protos" (list "UDP")) (dict "suffix" "intake-tcp" "protos" (list "TCP")) }}
+{{- end }}
+{{- range $g := $groups }}
+{{- $has := false }}
+{{- range $p := $ports }}{{ if and $p.on (has $p.proto $g.protos) }}{{ $has = true }}{{ end }}{{ end }}
+{{- if $has }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "seshat.fullname" $ }}-{{ $g.suffix }}
+  labels:
+    {{- include "seshat.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: intake
+  {{- with $.Values.intake.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $.Values.intake.service.type }}
+  {{- if eq $.Values.intake.service.type "LoadBalancer" }}
+  externalTrafficPolicy: {{ $.Values.intake.service.externalTrafficPolicy }}
+  {{- with $.Values.intake.service.loadBalancerIP }}
+  loadBalancerIP: {{ . | quote }}
+  {{- end }}
+  {{- with $.Values.intake.service.loadBalancerClass }}
+  loadBalancerClass: {{ . | quote }}
+  {{- end }}
+  {{- with $.Values.intake.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $.Values.intake.service.healthCheckNodePort }}
+  healthCheckNodePort: {{ . }}
+  {{- end }}
+  {{- else if eq $.Values.intake.service.type "NodePort" }}
+  externalTrafficPolicy: {{ $.Values.intake.service.externalTrafficPolicy }}
+  {{- end }}
+  selector:
+    {{- include "seshat.selector" (list $ "collector") | nindent 4 }}
+  ports:
+    {{- range $p := $ports }}
+    {{- if and $p.on (has $p.proto $g.protos) }}
+    - name: {{ $p.name }}
+      port: {{ $p.svc }}
+      targetPort: {{ $p.name }}
+      protocol: {{ $p.proto }}
+    {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

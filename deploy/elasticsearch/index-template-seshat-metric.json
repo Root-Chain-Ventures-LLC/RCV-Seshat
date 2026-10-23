@@ -1,0 +1,76 @@
+{
+  "index_patterns": [
+    "logs-seshat.metric-*"
+  ],
+  "data_stream": {},
+  "priority": 200,
+  "version": 1,
+  "composed_of": [
+    "seshat-core"
+  ],
+  "_meta": {
+    "managed_by": "seshat",
+    "seshat_schema_version": "1.0",
+    "ecs_version": "8.11.0",
+    "description": "Seshat seshat.metric data streams: streaming telemetry samples (gNMI, Cisco MDT, Juniper JTI): one document per leaf value."
+  },
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": 1,
+        "number_of_replicas": 1
+      }
+    },
+    "mappings": {
+      "properties": {
+        "seshat": {
+          "dynamic": false,
+          "properties": {
+            "metric": {
+              "properties": {
+                "path": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "value": {
+                  "type": "double"
+                },
+                "value_type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "value_string": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "labels": {
+                  "type": "flattened"
+                },
+                "source": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "subscription": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        },
+        "data_stream": {
+          "properties": {
+            "dataset": {
+              "type": "constant_keyword",
+              "value": "seshat.metric"
+            }
+          }
+        }
+      }
+    }
+  }
+}

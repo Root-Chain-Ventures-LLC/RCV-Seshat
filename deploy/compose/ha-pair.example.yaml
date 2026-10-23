@@ -1,0 +1,111 @@
+# Seshat high availability, modes 1 and 2 (docs/ha.md): two nodes, one floating address (active/standby)
+# or one address per node (multi-VIP active/active), SQLite on each node, settings and device knowledge
+# base replicated over the peer link.
+#
+# This file is an EXAMPLE for ONE HOST that runs both nodes so you can try the failover; in production
+# run one service per machine (copy a single service block to each host and change SESHAT_NODE_NAME,
+# SESHAT_CLUSTER_PEERS and SESHAT_CLUSTER_ADVERTISE). Run it:
+#
+#   cp .env.example .env          # then fill in the two secrets below
+#   docker compose -f deploy/compose/ha-pair.example.yaml up -d
+#
+# Then open http://<host>:8080 (node-a), create the administrator, go to Cluster > Configure and add an
+# instance whose virtual address is a FREE address in the host's subnet, with node-a and node-b priorities
+# (for example 150 and 100). Stop node-a (docker compose ... stop node-a) and watch the address move.
+#
+# What the settings mean
+# - network_mode: host   VRRP multicasts on the real interface and programs the virtual address onto it, so
+#                        the container must share the host's network namespace. Published ports do not apply:
+#                        each node therefore gets its own listen ports below (two nodes on one host cannot
+#                        both bind :8080 or :1162; separate machines keep the defaults).
+# - user: "0:0" + caps   VRRP needs CAP_NET_ADMIN (add/remove the address) and CAP_NET_RAW (IP protocol 112,
+#                        gratuitous ARP). The image's default user is non-root and holds no capabilities, so the
+#                        HA services are the ONE place that runs as root and with the host's network namespace.
+#                        Everything else is dropped: cap_drop ALL, then only NET_ADMIN and NET_RAW, plus
+#                        DAC_OVERRIDE because root without it cannot open the image's /data (0700, owned by uid
+#                        65532). To drop DAC_OVERRIDE too, make a fresh volume root-owned once, with any helper
+#                        image that has a shell (the Seshat image has none), before the first start:
+#                          docker run --rm --user 0 -v <volume>:/data busybox chown 0:0 /data
+#                        Add NET_BIND_SERVICE to listen on 162/514 directly instead of the high ports used below.
+#                        read_only + tmpfs /tmp + no-new-privileges apply as in compose.yaml. Because the process is
+#                        root, treat this host as part of the trusted base: a bug here is a root-in-container bug.
+#                        Not boot-tested on every platform: try the failover on a
+#                        spare host first. If the node logs a permission error, check `docker logs` for the missing capability.
+# - distinct data dirs   each node has its own SQLite database, queues and node ID.
+# - SESHAT_SECRET_KEY    must be identical on every node: SNMPv3 keys and destination credentials are sealed
+#                        with it and travel between nodes sealed.
+# - SESHAT_CLUSTER_SECRET  authenticates the peer link and (optionally) signs VRRP advertisements; identical on
+#                        every node, at least 16 characters.
+# - stop_grace_period    on stop a node releases its address, keeps serving for SESHAT_DRAIN_GRACE (3 s), then
+#                        waits up to SESHAT_DRAIN_TIMEOUT (20 s) for its output queues to empty.
+name: seshat-ha
+
+x-seshat: &seshat
+  image: ghcr.io/root-chain-ventures-llc/seshat:0.2.0
+  restart: unless-stopped
+  network_mode: host
+  user: "0:0"
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  cap_add: [NET_ADMIN, NET_RAW, DAC_OVERRIDE]
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 512
+  stop_grace_period: 40s
+  env_file:
+    - path: ../../.env
+      required: false
+  environment: &env
+    SESHAT_DEV: "0"
+    SESHAT_SECRET_KEY: ${SESHAT_SECRET_KEY:?set SESHAT_SECRET_KEY to the same 32+ character value on every node}
+    SESHAT_CLUSTER_SECRET: ${SESHAT_CLUSTER_SECRET:?set SESHAT_CLUSTER_SECRET to the same 16+ character value on every node}
+    SESHAT_CLUSTER_SYNC_INTERVAL: 5s
+
+services:
+  node-a:
+    <<: *seshat
+    container_name: seshat-node-a
+    environment:
+      <<: *env
+      SESHAT_NODE_NAME: node-a
+      SESHAT_LISTEN: ":8080"
+      SESHAT_SNMP_TRAP_LISTEN: ":1162"
+      SESHAT_SYSLOG_UDP_LISTEN: ":1514"
+      SESHAT_SYSLOG_TCP_LISTEN: ":1514"
+      SESHAT_FLOW_NETFLOW_LISTEN: ":2055"
+      SESHAT_FLOW_IPFIX_LISTEN: ":4739"
+      SESHAT_FLOW_SFLOW_LISTEN: ":6343"
+      SESHAT_TELEMETRY_GNMI_DIALOUT_LISTEN: ":57400"
+      # The other node's API address, and this node's own (shown to the peer; used to forward "drain node-b").
+      SESHAT_CLUSTER_PEERS: ${NODE_B_URL:-http://127.0.0.1:8180}
+      SESHAT_CLUSTER_ADVERTISE: http://127.0.0.1:8080
+    volumes:
+      - node-a-data:/data
+
+  node-b:
+    <<: *seshat
+    container_name: seshat-node-b
+    environment:
+      <<: *env
+      SESHAT_NODE_NAME: node-b
+      # Shifted ports because this example shares one host with node-a. On a separate machine delete these
+      # six lines and use the defaults.
+      SESHAT_LISTEN: ":8180"
+      SESHAT_SNMP_TRAP_LISTEN: ":1262"
+      SESHAT_SYSLOG_UDP_LISTEN: ":1614"
+      SESHAT_SYSLOG_TCP_LISTEN: ":1614"
+      SESHAT_FLOW_NETFLOW_LISTEN: ":2155"
+      SESHAT_FLOW_IPFIX_LISTEN: ":4839"
+      SESHAT_FLOW_SFLOW_LISTEN: ":6443"
+      SESHAT_TELEMETRY_GNMI_DIALOUT_LISTEN: ":57500"
+      SESHAT_CLUSTER_PEERS: ${NODE_A_URL:-http://127.0.0.1:8080}
+      SESHAT_CLUSTER_ADVERTISE: http://127.0.0.1:8180
+    volumes:
+      - node-b-data:/data
+
+volumes:
+  node-a-data:
+  node-b-data:

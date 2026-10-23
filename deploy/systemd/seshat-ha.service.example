@@ -1,0 +1,69 @@
+# Seshat as a systemd service with VRRP, WITHOUT the seshat package (docs/ha.md). With the package use the
+# packaged seshat.service plus the vrrp.conf drop-in instead; this file is the same thing merged into one
+# unit and carries the same hardening, so the two behave alike.
+#
+# Install: create the user (useradd --system --no-create-home --shell /usr/sbin/nologin seshat), copy this to
+# /etc/systemd/system/seshat.service, put the environment in /etc/seshat/seshat.env (mode 0600, root: SESHAT_SECRET_KEY,
+# SESHAT_NODE_NAME, SESHAT_CLUSTER_SECRET, SESHAT_CLUSTER_PEERS, ...), then: systemctl enable --now seshat
+[Unit]
+Description=Seshat telemetry gateway
+After=network-online.target
+Wants=network-online.target
+# Refuse to start (with a clear message in the journal) until the configuration exists.
+AssertPathExists=/etc/seshat/seshat.env
+
+[Service]
+Type=simple
+User=seshat
+Group=seshat
+ExecStart=/usr/local/bin/seshat
+EnvironmentFile=/etc/seshat/seshat.env
+Environment=SESHAT_DATA_DIR=/var/lib/seshat SESHAT_PACKS_DIR=/usr/share/seshat/packs
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+# SIGTERM releases the virtual address, keeps serving for SESHAT_DRAIN_GRACE, then waits up to
+# SESHAT_DRAIN_TIMEOUT for the output queues to empty: allow for both.
+TimeoutStopSec=40
+# A killed or crashed process cannot remove its virtual address, and with host networking it stays on
+# the interface. Remove it on every stop (a missing address is not an error; repeat per address). The
+# running node also removes a stale address it finds while another node is master.
+ExecStopPost=-/usr/sbin/ip addr del 192.0.2.100/32 dev eth0
+
+StateDirectory=seshat
+StateDirectoryMode=0700
+UMask=0077
+# VRRP programs the virtual address (NET_ADMIN) and speaks IP protocol 112 and ARP (NET_RAW). Ambient
+# capabilities let the unprivileged "seshat" user hold them. CAP_NET_BIND_SERVICE is only needed when you
+# listen on 162/514 directly instead of behind a port mapping or high ports: add it to both lines then.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+RemoveIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+# AF_PACKET: gratuitous ARP. AF_NETLINK: interface and address discovery and programming.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_PACKET
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

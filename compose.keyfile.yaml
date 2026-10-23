@@ -1,0 +1,20 @@
+# Overlay: read the secret key from a file (a Docker secret) instead of the SESHAT_SECRET_KEY environment
+# variable, so the key never appears in `docker inspect`, `docker compose config` or the process environment.
+#   umask 077; openssl rand -base64 48 > secret.key
+#   sudo chown 65532:65532 secret.key && sudo chmod 0400 secret.key     # the container user must be able to read it
+#   docker compose -f compose.yaml -f compose.keyfile.yaml up -d
+# Compose bind-mounts the file as it is on the host, so its owner and mode are what the container sees; the
+# server warns at start when the file is readable by group or others. Remove SESHAT_SECRET_KEY from .env: when
+# both are set the file wins (and the server says so). Back the key up separately from the data (docs/hardening.md).
+name: seshat
+
+secrets:
+  seshat_secret_key:
+    file: ./secret.key
+
+services:
+  seshat:
+    environment:
+      SESHAT_SECRET_KEY_FILE: /run/secrets/seshat_secret_key
+    secrets:
+      - seshat_secret_key

@@ -1,0 +1,3777 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:seshat:schema:event:1.0",
+  "title": "Seshat event document (schema 1.0, ECS 8.11.0)",
+  "description": "One document emitted by Seshat for any dataset. Documents are nested JSON objects (not dotted keys). The `event.dataset` value selects the dataset definition. ECS groups tolerate extra fields; the `seshat` namespace is closed (vendor-specific data lives in `flattened` fields).",
+  "type": "object",
+  "required": [
+    "@timestamp",
+    "event",
+    "seshat"
+  ],
+  "properties": {
+    "@timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "event": {
+      "type": "object",
+      "required": [
+        "dataset"
+      ],
+      "properties": {
+        "dataset": {
+          "enum": [
+            "seshat.trap",
+            "seshat.syslog",
+            "seshat.flow",
+            "seshat.flow_rollup",
+            "seshat.tracker",
+            "seshat.device",
+            "seshat.metric"
+          ]
+        }
+      }
+    },
+    "seshat": {
+      "type": "object",
+      "required": [
+        "schema_version"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "event"
+        ],
+        "properties": {
+          "event": {
+            "required": [
+              "dataset"
+            ],
+            "properties": {
+              "dataset": {
+                "const": "seshat.trap"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/dataset_trap"
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "event"
+        ],
+        "properties": {
+          "event": {
+            "required": [
+              "dataset"
+            ],
+            "properties": {
+              "dataset": {
+                "const": "seshat.syslog"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/dataset_syslog"
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "event"
+        ],
+        "properties": {
+          "event": {
+            "required": [
+              "dataset"
+            ],
+            "properties": {
+              "dataset": {
+                "const": "seshat.flow"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/dataset_flow"
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "event"
+        ],
+        "properties": {
+          "event": {
+            "required": [
+              "dataset"
+            ],
+            "properties": {
+              "dataset": {
+                "const": "seshat.flow_rollup"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/dataset_flow_rollup"
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "event"
+        ],
+        "properties": {
+          "event": {
+            "required": [
+              "dataset"
+            ],
+            "properties": {
+              "dataset": {
+                "const": "seshat.tracker"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/dataset_tracker"
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "event"
+        ],
+        "properties": {
+          "event": {
+            "required": [
+              "dataset"
+            ],
+            "properties": {
+              "dataset": {
+                "const": "seshat.device"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/dataset_device"
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "event"
+        ],
+        "properties": {
+          "event": {
+            "required": [
+              "dataset"
+            ],
+            "properties": {
+              "dataset": {
+                "const": "seshat.metric"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/dataset_metric"
+      }
+    }
+  ],
+  "$defs": {
+    "dataset_trap": {
+      "type": "object",
+      "properties": {
+        "@timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ecs": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "const": "8.11.0"
+            }
+          },
+          "required": [
+            "version"
+          ]
+        },
+        "data_stream": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "logs"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.trap"
+            },
+            "namespace": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$",
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "type",
+            "dataset",
+            "namespace"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "labels": {
+          "type": "object"
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            }
+          }
+        },
+        "event": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "event",
+                "metric",
+                "state"
+              ]
+            },
+            "category": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "action": {
+              "type": "string"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.trap"
+            },
+            "module": {
+              "type": "string",
+              "const": "seshat"
+            },
+            "id": {
+              "type": "string"
+            },
+            "created": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "ingested": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "original": {
+              "type": "string"
+            },
+            "severity": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 7
+            },
+            "code": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "category",
+            "dataset",
+            "module",
+            "id",
+            "created",
+            "severity"
+          ]
+        },
+        "observer": {
+          "type": "object",
+          "properties": {
+            "vendor": {
+              "type": "string"
+            },
+            "product": {
+              "type": "string",
+              "const": "Seshat"
+            },
+            "version": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "gateway"
+              ]
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "vendor",
+            "product",
+            "version"
+          ]
+        },
+        "host": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            },
+            "mac": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^([0-9a-f]{2}:){5}[0-9a-f]{2}$"
+              }
+            }
+          }
+        },
+        "related": {
+          "type": "object",
+          "properties": {
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            },
+            "hosts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "seshat": {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+$"
+            },
+            "source": {
+              "$ref": "#/$defs/shared_seshat_source"
+            },
+            "device": {
+              "$ref": "#/$defs/shared_seshat_device"
+            },
+            "enrichment": {
+              "type": "object",
+              "properties": {
+                "level": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "partial",
+                    "full"
+                  ]
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "kb_observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "backfilled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "level"
+              ],
+              "additionalProperties": false
+            },
+            "route": {
+              "type": "object",
+              "properties": {
+                "matched": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "destinations": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "trap": {
+              "type": "object",
+              "properties": {
+                "oid": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "mib": {
+                  "type": "string"
+                },
+                "enterprise": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string",
+                  "enum": [
+                    "v1",
+                    "v2c",
+                    "v3"
+                  ]
+                },
+                "pdu_type": {
+                  "type": "string",
+                  "enum": [
+                    "trap",
+                    "inform"
+                  ]
+                },
+                "translated": {
+                  "type": "boolean"
+                },
+                "agent_address": {
+                  "type": "string",
+                  "anyOf": [
+                    {
+                      "format": "ipv4"
+                    },
+                    {
+                      "format": "ipv6"
+                    }
+                  ]
+                },
+                "uptime_ticks": {
+                  "type": "integer"
+                },
+                "generic_type": {
+                  "type": "integer"
+                },
+                "specific_type": {
+                  "type": "integer"
+                },
+                "engine_id": {
+                  "type": "string"
+                },
+                "context_name": {
+                  "type": "string"
+                },
+                "security_name": {
+                  "type": "string"
+                },
+                "varbinds": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "oid": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "Integer32",
+                          "Unsigned32",
+                          "Gauge32",
+                          "Counter32",
+                          "Counter64",
+                          "TimeTicks",
+                          "IpAddress",
+                          "OctetString",
+                          "ObjectIdentifier",
+                          "Opaque",
+                          "Null",
+                          "BITS"
+                        ]
+                      },
+                      "value": {
+                        "type": "string"
+                      },
+                      "raw": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "oid",
+                      "type",
+                      "value"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "vars": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "oid",
+                "version",
+                "pdu_type",
+                "translated"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "schema_version",
+            "source",
+            "device",
+            "enrichment",
+            "trap"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "@timestamp",
+        "ecs",
+        "data_stream",
+        "message",
+        "event",
+        "observer",
+        "seshat"
+      ],
+      "$comment": "seshat.trap: SNMP traps and informs."
+    },
+    "dataset_syslog": {
+      "type": "object",
+      "properties": {
+        "@timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ecs": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "const": "8.11.0"
+            }
+          },
+          "required": [
+            "version"
+          ]
+        },
+        "data_stream": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "logs"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.syslog"
+            },
+            "namespace": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$",
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "type",
+            "dataset",
+            "namespace"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "labels": {
+          "type": "object"
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            }
+          }
+        },
+        "event": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "event",
+                "metric",
+                "state"
+              ]
+            },
+            "category": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "action": {
+              "type": "string"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.syslog"
+            },
+            "module": {
+              "type": "string",
+              "const": "seshat"
+            },
+            "id": {
+              "type": "string"
+            },
+            "created": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "ingested": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "original": {
+              "type": "string"
+            },
+            "severity": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 7
+            },
+            "code": {
+              "type": "string"
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "success",
+                "failure",
+                "unknown"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "category",
+            "dataset",
+            "module",
+            "id",
+            "created",
+            "original",
+            "severity"
+          ]
+        },
+        "observer": {
+          "type": "object",
+          "properties": {
+            "vendor": {
+              "type": "string"
+            },
+            "product": {
+              "type": "string",
+              "const": "Seshat"
+            },
+            "version": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "gateway"
+              ]
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "vendor",
+            "product",
+            "version"
+          ]
+        },
+        "host": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            },
+            "mac": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^([0-9a-f]{2}:){5}[0-9a-f]{2}$"
+              }
+            }
+          }
+        },
+        "related": {
+          "type": "object",
+          "properties": {
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            },
+            "hosts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "user": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "log": {
+          "type": "object",
+          "properties": {
+            "level": {
+              "type": "string",
+              "enum": [
+                "emergency",
+                "alert",
+                "critical",
+                "error",
+                "warning",
+                "notice",
+                "informational",
+                "debug"
+              ]
+            },
+            "syslog": {
+              "type": "object",
+              "properties": {
+                "facility": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 23
+                    },
+                    "name": {
+                      "type": "string",
+                      "enum": [
+                        "kern",
+                        "user",
+                        "mail",
+                        "daemon",
+                        "auth",
+                        "syslog",
+                        "lpr",
+                        "news",
+                        "uucp",
+                        "cron",
+                        "authpriv",
+                        "ftp",
+                        "ntp",
+                        "security",
+                        "console",
+                        "solaris-cron",
+                        "local0",
+                        "local1",
+                        "local2",
+                        "local3",
+                        "local4",
+                        "local5",
+                        "local6",
+                        "local7"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "name"
+                  ]
+                },
+                "severity": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 7
+                    },
+                    "name": {
+                      "type": "string",
+                      "enum": [
+                        "emergency",
+                        "alert",
+                        "critical",
+                        "error",
+                        "warning",
+                        "notice",
+                        "informational",
+                        "debug"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "name"
+                  ]
+                },
+                "priority": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 191
+                }
+              },
+              "required": [
+                "facility",
+                "severity",
+                "priority"
+              ]
+            }
+          },
+          "required": [
+            "level",
+            "syslog"
+          ]
+        },
+        "process": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "pid": {
+              "type": "integer"
+            }
+          }
+        },
+        "user": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        "source": {
+          "$ref": "#/$defs/shared_destination"
+        },
+        "destination": {
+          "$ref": "#/$defs/shared_destination"
+        },
+        "network": {
+          "type": "object",
+          "properties": {
+            "transport": {
+              "type": "string"
+            },
+            "iana_number": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "ipv4",
+                "ipv6"
+              ]
+            },
+            "protocol": {
+              "type": "string"
+            },
+            "application": {
+              "type": "string"
+            },
+            "direction": {
+              "type": "string",
+              "enum": [
+                "ingress",
+                "egress",
+                "inbound",
+                "outbound",
+                "internal",
+                "external",
+                "unknown"
+              ]
+            },
+            "bytes": {
+              "type": "integer"
+            },
+            "packets": {
+              "type": "integer"
+            },
+            "community_id": {
+              "type": "string"
+            }
+          }
+        },
+        "seshat": {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+$"
+            },
+            "source": {
+              "$ref": "#/$defs/shared_seshat_source"
+            },
+            "device": {
+              "$ref": "#/$defs/shared_seshat_device"
+            },
+            "enrichment": {
+              "type": "object",
+              "properties": {
+                "level": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "partial",
+                    "full"
+                  ]
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "kb_observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "backfilled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "level"
+              ],
+              "additionalProperties": false
+            },
+            "route": {
+              "type": "object",
+              "properties": {
+                "matched": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "destinations": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "syslog": {
+              "type": "object",
+              "properties": {
+                "format": {
+                  "type": "string",
+                  "enum": [
+                    "rfc5424",
+                    "rfc3164",
+                    "cef",
+                    "leef",
+                    "other"
+                  ]
+                },
+                "priority": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 191
+                },
+                "facility": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 23
+                    },
+                    "name": {
+                      "type": "string",
+                      "enum": [
+                        "kern",
+                        "user",
+                        "mail",
+                        "daemon",
+                        "auth",
+                        "syslog",
+                        "lpr",
+                        "news",
+                        "uucp",
+                        "cron",
+                        "authpriv",
+                        "ftp",
+                        "ntp",
+                        "security",
+                        "console",
+                        "solaris-cron",
+                        "local0",
+                        "local1",
+                        "local2",
+                        "local3",
+                        "local4",
+                        "local5",
+                        "local6",
+                        "local7"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                },
+                "severity": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 7
+                    },
+                    "name": {
+                      "type": "string",
+                      "enum": [
+                        "emergency",
+                        "alert",
+                        "critical",
+                        "error",
+                        "warning",
+                        "notice",
+                        "informational",
+                        "debug"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                },
+                "version": {
+                  "type": "integer"
+                },
+                "hostname": {
+                  "type": "string"
+                },
+                "appname": {
+                  "type": "string"
+                },
+                "procid": {
+                  "type": "string"
+                },
+                "msgid": {
+                  "type": "string"
+                },
+                "sd": {
+                  "type": "object"
+                },
+                "extension": {
+                  "type": "object"
+                },
+                "parser": {
+                  "type": "string"
+                },
+                "template_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "format",
+                "priority",
+                "facility",
+                "severity"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "schema_version",
+            "source",
+            "device",
+            "enrichment",
+            "syslog"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "@timestamp",
+        "ecs",
+        "data_stream",
+        "message",
+        "event",
+        "observer",
+        "log",
+        "seshat"
+      ],
+      "$comment": "seshat.syslog: syslog messages (RFC 3164, RFC 5424, CEF, LEEF)."
+    },
+    "dataset_flow": {
+      "type": "object",
+      "properties": {
+        "@timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ecs": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "const": "8.11.0"
+            }
+          },
+          "required": [
+            "version"
+          ]
+        },
+        "data_stream": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "logs"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.flow"
+            },
+            "namespace": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$",
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "type",
+            "dataset",
+            "namespace"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "labels": {
+          "type": "object"
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            }
+          }
+        },
+        "event": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "event",
+                "metric",
+                "state"
+              ]
+            },
+            "category": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "action": {
+              "type": "string"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.flow"
+            },
+            "module": {
+              "type": "string",
+              "const": "seshat"
+            },
+            "id": {
+              "type": "string"
+            },
+            "created": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "ingested": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "original": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "success",
+                "failure",
+                "unknown"
+              ]
+            },
+            "start": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "end": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "duration": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "category",
+            "dataset",
+            "module",
+            "id",
+            "created",
+            "start",
+            "end"
+          ]
+        },
+        "observer": {
+          "type": "object",
+          "properties": {
+            "vendor": {
+              "type": "string"
+            },
+            "product": {
+              "type": "string",
+              "const": "Seshat"
+            },
+            "version": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "gateway"
+              ]
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "vendor",
+            "product",
+            "version"
+          ]
+        },
+        "host": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            },
+            "mac": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^([0-9a-f]{2}:){5}[0-9a-f]{2}$"
+              }
+            }
+          }
+        },
+        "related": {
+          "type": "object",
+          "properties": {
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            },
+            "hosts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "user": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        "source": {
+          "$ref": "#/$defs/shared_destination_2"
+        },
+        "destination": {
+          "$ref": "#/$defs/shared_destination_2"
+        },
+        "network": {
+          "type": "object",
+          "properties": {
+            "transport": {
+              "type": "string"
+            },
+            "iana_number": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "ipv4",
+                "ipv6"
+              ]
+            },
+            "protocol": {
+              "type": "string"
+            },
+            "application": {
+              "type": "string"
+            },
+            "direction": {
+              "type": "string",
+              "enum": [
+                "ingress",
+                "egress",
+                "inbound",
+                "outbound",
+                "internal",
+                "external",
+                "unknown"
+              ]
+            },
+            "bytes": {
+              "type": "integer"
+            },
+            "packets": {
+              "type": "integer"
+            },
+            "community_id": {
+              "type": "string"
+            },
+            "vlan": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "seshat": {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+$"
+            },
+            "source": {
+              "$ref": "#/$defs/shared_seshat_source"
+            },
+            "device": {
+              "$ref": "#/$defs/shared_seshat_device"
+            },
+            "enrichment": {
+              "type": "object",
+              "properties": {
+                "level": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "partial",
+                    "full"
+                  ]
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "kb_observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "backfilled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "level"
+              ],
+              "additionalProperties": false
+            },
+            "route": {
+              "type": "object",
+              "properties": {
+                "matched": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "destinations": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "flow": {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "type": "string",
+                  "enum": [
+                    "netflow5",
+                    "netflow9",
+                    "ipfix",
+                    "sflow5",
+                    "jflow",
+                    "netstream",
+                    "nsel"
+                  ]
+                },
+                "exporter": {
+                  "type": "string",
+                  "anyOf": [
+                    {
+                      "format": "ipv4"
+                    },
+                    {
+                      "format": "ipv6"
+                    }
+                  ]
+                },
+                "domain": {
+                  "type": "integer"
+                },
+                "template": {
+                  "type": "integer"
+                },
+                "sampling_rate": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "scaled": {
+                  "type": "boolean"
+                },
+                "bytes_raw": {
+                  "type": "integer"
+                },
+                "packets_raw": {
+                  "type": "integer"
+                },
+                "tcp_flags": {
+                  "type": "integer"
+                },
+                "tcp_flags_names": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "tos": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "dscp": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 63
+                },
+                "input_ifindex": {
+                  "type": "integer"
+                },
+                "output_ifindex": {
+                  "type": "integer"
+                },
+                "input_ifname": {
+                  "type": "string"
+                },
+                "output_ifname": {
+                  "type": "string"
+                },
+                "next_hop": {
+                  "type": "string",
+                  "anyOf": [
+                    {
+                      "format": "ipv4"
+                    },
+                    {
+                      "format": "ipv6"
+                    }
+                  ]
+                },
+                "src_mask": {
+                  "type": "integer"
+                },
+                "dst_mask": {
+                  "type": "integer"
+                },
+                "src_vlan": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4095
+                },
+                "dst_vlan": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4095
+                },
+                "icmp_type": {
+                  "type": "integer"
+                },
+                "icmp_code": {
+                  "type": "integer"
+                },
+                "end_reason": {
+                  "type": "string",
+                  "enum": [
+                    "idle-timeout",
+                    "active-timeout",
+                    "end-of-flow",
+                    "forced-end",
+                    "lack-of-resources"
+                  ]
+                },
+                "ie": {
+                  "type": "object"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "firewall_event": {
+                  "type": "string"
+                },
+                "firewall_ext_event": {
+                  "type": "integer"
+                },
+                "nat_event": {
+                  "type": "string"
+                },
+                "vrf": {
+                  "type": "string"
+                },
+                "ingress_vrf_id": {
+                  "type": "integer"
+                },
+                "egress_vrf_id": {
+                  "type": "integer"
+                },
+                "observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "application": {
+                  "type": "object",
+                  "properties": {
+                    "category": {
+                      "type": "string"
+                    },
+                    "subcategory": {
+                      "type": "string"
+                    },
+                    "group": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "version",
+                "exporter",
+                "sampling_rate",
+                "scaled"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "schema_version",
+            "source",
+            "device",
+            "enrichment",
+            "flow"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "@timestamp",
+        "ecs",
+        "data_stream",
+        "event",
+        "observer",
+        "seshat"
+      ],
+      "$comment": "seshat.flow: flow records (NetFlow, IPFIX, sFlow, NSEL)."
+    },
+    "dataset_flow_rollup": {
+      "type": "object",
+      "properties": {
+        "@timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ecs": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "const": "8.11.0"
+            }
+          },
+          "required": [
+            "version"
+          ]
+        },
+        "data_stream": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "logs"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.flow_rollup"
+            },
+            "namespace": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$",
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "type",
+            "dataset",
+            "namespace"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "labels": {
+          "type": "object"
+        },
+        "event": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "event",
+                "metric",
+                "state"
+              ]
+            },
+            "category": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "action": {
+              "type": "string"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.flow_rollup"
+            },
+            "module": {
+              "type": "string",
+              "const": "seshat"
+            },
+            "id": {
+              "type": "string"
+            },
+            "created": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "ingested": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "start": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "end": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "duration": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "category",
+            "dataset",
+            "module",
+            "id",
+            "created",
+            "start",
+            "end"
+          ]
+        },
+        "observer": {
+          "type": "object",
+          "properties": {
+            "vendor": {
+              "type": "string"
+            },
+            "product": {
+              "type": "string",
+              "const": "Seshat"
+            },
+            "version": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "gateway"
+              ]
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "vendor",
+            "product",
+            "version"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/shared_destination_3"
+        },
+        "destination": {
+          "$ref": "#/$defs/shared_destination_3"
+        },
+        "network": {
+          "type": "object",
+          "properties": {
+            "transport": {
+              "type": "string"
+            },
+            "iana_number": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "ipv4",
+                "ipv6"
+              ]
+            },
+            "protocol": {
+              "type": "string"
+            },
+            "application": {
+              "type": "string"
+            },
+            "direction": {
+              "type": "string",
+              "enum": [
+                "ingress",
+                "egress",
+                "inbound",
+                "outbound",
+                "internal",
+                "external",
+                "unknown"
+              ]
+            },
+            "bytes": {
+              "type": "integer"
+            },
+            "packets": {
+              "type": "integer"
+            },
+            "vlan": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "seshat": {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+$"
+            },
+            "source": {
+              "type": "object",
+              "properties": {
+                "site": {
+                  "type": "string"
+                },
+                "vrf": {
+                  "type": "string"
+                },
+                "edge": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "device": {
+              "$ref": "#/$defs/shared_seshat_device"
+            },
+            "enrichment": {
+              "type": "object",
+              "properties": {
+                "level": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "partial",
+                    "full"
+                  ]
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "kb_observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "backfilled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "level"
+              ],
+              "additionalProperties": false
+            },
+            "route": {
+              "type": "object",
+              "properties": {
+                "matched": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "destinations": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "flow": {
+              "type": "object",
+              "properties": {
+                "exporter": {
+                  "type": "string",
+                  "anyOf": [
+                    {
+                      "format": "ipv4"
+                    },
+                    {
+                      "format": "ipv6"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "rollup": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "top_talker",
+                    "interface",
+                    "application"
+                  ]
+                },
+                "interval_seconds": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "flows": {
+                  "type": "integer"
+                },
+                "rank": {
+                  "type": "integer"
+                },
+                "top_n": {
+                  "type": "integer"
+                },
+                "if_index": {
+                  "type": "integer"
+                },
+                "if_name": {
+                  "type": "string"
+                },
+                "direction": {
+                  "type": "string",
+                  "enum": [
+                    "ingress",
+                    "egress"
+                  ]
+                },
+                "other": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "kind",
+                "interval_seconds",
+                "flows"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "schema_version",
+            "device",
+            "enrichment",
+            "rollup"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "@timestamp",
+        "ecs",
+        "data_stream",
+        "event",
+        "observer",
+        "seshat"
+      ],
+      "$comment": "seshat.flow_rollup: one-minute flow roll-ups (top talkers, per-interface, per-application)."
+    },
+    "dataset_tracker": {
+      "type": "object",
+      "properties": {
+        "@timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ecs": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "const": "8.11.0"
+            }
+          },
+          "required": [
+            "version"
+          ]
+        },
+        "data_stream": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "logs"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.tracker"
+            },
+            "namespace": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$",
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "type",
+            "dataset",
+            "namespace"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "labels": {
+          "type": "object"
+        },
+        "event": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "event",
+                "metric",
+                "state"
+              ]
+            },
+            "category": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "action": {
+              "type": "string"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.tracker"
+            },
+            "module": {
+              "type": "string",
+              "const": "seshat"
+            },
+            "id": {
+              "type": "string"
+            },
+            "created": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "ingested": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "severity": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 7
+            }
+          },
+          "required": [
+            "kind",
+            "category",
+            "dataset",
+            "module",
+            "id",
+            "created"
+          ]
+        },
+        "observer": {
+          "type": "object",
+          "properties": {
+            "vendor": {
+              "type": "string"
+            },
+            "product": {
+              "type": "string",
+              "const": "Seshat"
+            },
+            "version": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "gateway"
+              ]
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "vendor",
+            "product",
+            "version"
+          ]
+        },
+        "related": {
+          "type": "object",
+          "properties": {
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            },
+            "hosts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "user": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "seshat": {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+$"
+            },
+            "source": {
+              "type": "object",
+              "properties": {
+                "listener": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "string",
+                  "enum": [
+                    "snmp",
+                    "syslog",
+                    "flow",
+                    "poller",
+                    "edge",
+                    "telemetry"
+                  ]
+                },
+                "site": {
+                  "type": "string"
+                },
+                "vrf": {
+                  "type": "string"
+                },
+                "edge": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "device": {
+              "$ref": "#/$defs/shared_seshat_device"
+            },
+            "enrichment": {
+              "type": "object",
+              "properties": {
+                "level": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "partial",
+                    "full"
+                  ]
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "kb_observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "backfilled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "level"
+              ],
+              "additionalProperties": false
+            },
+            "route": {
+              "type": "object",
+              "properties": {
+                "matched": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "destinations": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "tracker": {
+              "type": "object",
+              "properties": {
+                "fact": {
+                  "type": "string",
+                  "enum": [
+                    "location",
+                    "l3",
+                    "wireless",
+                    "user"
+                  ]
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "poll-fdb",
+                    "poll-arp",
+                    "poll-wireless",
+                    "poll-subscriber",
+                    "trap",
+                    "dhcp",
+                    "radius",
+                    "ad",
+                    "flow",
+                    "api",
+                    "inventory",
+                    "dns",
+                    "oui",
+                    "fingerprint"
+                  ]
+                },
+                "observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "first_seen": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "last_seen": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "interval_id": {
+                  "type": "string"
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0.0,
+                  "maximum": 1.0
+                },
+                "mac": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{2}:){5}[0-9a-f]{2}$"
+                },
+                "ip": {
+                  "type": "string",
+                  "anyOf": [
+                    {
+                      "format": "ipv4"
+                    },
+                    {
+                      "format": "ipv6"
+                    }
+                  ]
+                },
+                "vrf": {
+                  "type": "string"
+                },
+                "hostname": {
+                  "type": "string"
+                },
+                "user": {
+                  "type": "string"
+                },
+                "oui_vendor": {
+                  "type": "string"
+                },
+                "device_type": {
+                  "type": "string"
+                },
+                "randomized_mac": {
+                  "type": "boolean"
+                },
+                "lease_expires": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "gateway": {
+                  "type": "string",
+                  "anyOf": [
+                    {
+                      "format": "ipv4"
+                    },
+                    {
+                      "format": "ipv6"
+                    }
+                  ]
+                },
+                "watch": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "integer"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "location": {
+                  "type": "object",
+                  "properties": {
+                    "site": {
+                      "type": "string"
+                    },
+                    "device": {
+                      "type": "string"
+                    },
+                    "port": {
+                      "type": "string"
+                    },
+                    "ifindex": {
+                      "type": "integer"
+                    },
+                    "vlan": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 4095
+                    },
+                    "ap": {
+                      "type": "string"
+                    },
+                    "ssid": {
+                      "type": "string"
+                    },
+                    "band": {
+                      "type": "string",
+                      "enum": [
+                        "2.4",
+                        "5",
+                        "6"
+                      ]
+                    },
+                    "rssi": {
+                      "type": "integer"
+                    },
+                    "channel": {
+                      "type": "integer"
+                    },
+                    "circuit_id": {
+                      "type": "string"
+                    },
+                    "remote_id": {
+                      "type": "string"
+                    },
+                    "circuit_kind": {
+                      "type": "string"
+                    },
+                    "trace": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "fact",
+                "source",
+                "observed_at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "schema_version",
+            "device",
+            "enrichment",
+            "tracker"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "@timestamp",
+        "ecs",
+        "data_stream",
+        "event",
+        "observer",
+        "seshat"
+      ],
+      "$comment": "seshat.tracker: Device Tracker sightings and interval events."
+    },
+    "dataset_device": {
+      "type": "object",
+      "properties": {
+        "@timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ecs": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "const": "8.11.0"
+            }
+          },
+          "required": [
+            "version"
+          ]
+        },
+        "data_stream": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "logs"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.device"
+            },
+            "namespace": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$",
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "type",
+            "dataset",
+            "namespace"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "labels": {
+          "type": "object"
+        },
+        "event": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "event",
+                "metric",
+                "state"
+              ]
+            },
+            "category": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "action": {
+              "type": "string"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.device"
+            },
+            "module": {
+              "type": "string",
+              "const": "seshat"
+            },
+            "id": {
+              "type": "string"
+            },
+            "created": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "ingested": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "kind",
+            "category",
+            "dataset",
+            "module",
+            "id",
+            "created"
+          ]
+        },
+        "observer": {
+          "type": "object",
+          "properties": {
+            "vendor": {
+              "type": "string"
+            },
+            "product": {
+              "type": "string",
+              "const": "Seshat"
+            },
+            "version": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "gateway"
+              ]
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "vendor",
+            "product",
+            "version"
+          ]
+        },
+        "host": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            },
+            "mac": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^([0-9a-f]{2}:){5}[0-9a-f]{2}$"
+              }
+            }
+          },
+          "required": [
+            "name",
+            "ip"
+          ]
+        },
+        "seshat": {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+$"
+            },
+            "device": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "known",
+                    "unknown",
+                    "stale"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "vendor": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "os": {
+                  "type": "string"
+                },
+                "os_version": {
+                  "type": "string"
+                },
+                "serial": {
+                  "type": "string"
+                },
+                "site": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "tenant": {
+                  "type": "string"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "pack": {
+                  "type": "string"
+                },
+                "custom": {
+                  "type": "object"
+                },
+                "first_seen": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "last_seen": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "sys_name": {
+                  "type": "string"
+                },
+                "sys_object_id": {
+                  "type": "string"
+                },
+                "engine_id": {
+                  "type": "string"
+                },
+                "exporter_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "inventory",
+                    "learned",
+                    "dns",
+                    "snmp",
+                    "manual"
+                  ]
+                },
+                "revision": {
+                  "type": "integer"
+                },
+                "interfaces": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "index": {
+                        "type": "integer"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "alias": {
+                        "type": "string"
+                      },
+                      "speed_bps": {
+                        "type": "integer"
+                      },
+                      "type": {
+                        "type": "string"
+                      },
+                      "admin_status": {
+                        "type": "string"
+                      },
+                      "oper_status": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "provenance": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "status",
+                "id",
+                "source",
+                "revision"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "schema_version",
+            "device"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "@timestamp",
+        "ecs",
+        "data_stream",
+        "event",
+        "observer",
+        "host",
+        "seshat"
+      ],
+      "$comment": "seshat.device: device knowledge base records."
+    },
+    "dataset_metric": {
+      "type": "object",
+      "properties": {
+        "@timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ecs": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "const": "8.11.0"
+            }
+          },
+          "required": [
+            "version"
+          ]
+        },
+        "data_stream": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "logs"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.metric"
+            },
+            "namespace": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$",
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "type",
+            "dataset",
+            "namespace"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "labels": {
+          "type": "object"
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            }
+          }
+        },
+        "event": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "event",
+                "metric",
+                "state"
+              ]
+            },
+            "category": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "action": {
+              "type": "string"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.metric"
+            },
+            "module": {
+              "type": "string",
+              "const": "seshat"
+            },
+            "id": {
+              "type": "string"
+            },
+            "created": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "ingested": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "kind",
+            "category",
+            "dataset",
+            "module",
+            "id",
+            "created"
+          ]
+        },
+        "observer": {
+          "type": "object",
+          "properties": {
+            "vendor": {
+              "type": "string"
+            },
+            "product": {
+              "type": "string",
+              "const": "Seshat"
+            },
+            "version": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "gateway"
+              ]
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "vendor",
+            "product",
+            "version"
+          ]
+        },
+        "host": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "related": {
+          "type": "object",
+          "properties": {
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "seshat": {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+$"
+            },
+            "source": {
+              "type": "object",
+              "properties": {
+                "input": {
+                  "type": "string",
+                  "enum": [
+                    "snmp",
+                    "syslog",
+                    "flow",
+                    "poller",
+                    "edge",
+                    "telemetry"
+                  ]
+                },
+                "protocol": {
+                  "type": "string",
+                  "enum": [
+                    "udp",
+                    "tcp",
+                    "tls",
+                    "grpc"
+                  ]
+                },
+                "ip": {
+                  "type": "string",
+                  "anyOf": [
+                    {
+                      "format": "ipv4"
+                    },
+                    {
+                      "format": "ipv6"
+                    }
+                  ]
+                },
+                "port": {
+                  "type": "integer"
+                },
+                "site": {
+                  "type": "string"
+                },
+                "vrf": {
+                  "type": "string"
+                },
+                "edge": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "input"
+              ],
+              "additionalProperties": false
+            },
+            "device": {
+              "$ref": "#/$defs/shared_seshat_device"
+            },
+            "enrichment": {
+              "type": "object",
+              "properties": {
+                "level": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "partial",
+                    "full"
+                  ]
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "kb_observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "backfilled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "level"
+              ],
+              "additionalProperties": false
+            },
+            "route": {
+              "type": "object",
+              "properties": {
+                "matched": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "destinations": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "metric": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "number"
+                },
+                "value_type": {
+                  "type": "string",
+                  "enum": [
+                    "int64",
+                    "uint64",
+                    "double",
+                    "string",
+                    "bool",
+                    "delete"
+                  ]
+                },
+                "value_string": {
+                  "type": "string"
+                },
+                "labels": {
+                  "type": "object"
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "gnmi",
+                    "mdt",
+                    "jti"
+                  ]
+                },
+                "subscription": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "name",
+                "value_type",
+                "source"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "schema_version",
+            "source",
+            "device",
+            "enrichment",
+            "metric"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "@timestamp",
+        "ecs",
+        "data_stream",
+        "event",
+        "observer",
+        "seshat"
+      ],
+      "$comment": "seshat.metric: streaming telemetry samples (gNMI, Cisco MDT, Juniper JTI): one document per leaf value."
+    },
+    "shared_seshat_source": {
+      "type": "object",
+      "properties": {
+        "listener": {
+          "type": "string"
+        },
+        "input": {
+          "type": "string",
+          "enum": [
+            "snmp",
+            "syslog",
+            "flow",
+            "poller",
+            "edge",
+            "telemetry"
+          ]
+        },
+        "protocol": {
+          "type": "string",
+          "enum": [
+            "udp",
+            "tcp",
+            "tls",
+            "grpc"
+          ]
+        },
+        "ip": {
+          "type": "string",
+          "anyOf": [
+            {
+              "format": "ipv4"
+            },
+            {
+              "format": "ipv6"
+            }
+          ]
+        },
+        "port": {
+          "type": "integer"
+        },
+        "site": {
+          "type": "string"
+        },
+        "vrf": {
+          "type": "string"
+        },
+        "edge": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "listener",
+        "input"
+      ],
+      "additionalProperties": false
+    },
+    "shared_seshat_device": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "known",
+            "unknown",
+            "stale"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "vendor": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "os_version": {
+          "type": "string"
+        },
+        "serial": {
+          "type": "string"
+        },
+        "site": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "tenant": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pack": {
+          "type": "string"
+        },
+        "custom": {
+          "type": "object"
+        },
+        "first_seen": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "last_seen": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "interface": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "index": {
+              "type": "integer"
+            },
+            "alias": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "shared_destination": {
+      "type": "object",
+      "properties": {
+        "ip": {
+          "type": "string",
+          "anyOf": [
+            {
+              "format": "ipv4"
+            },
+            {
+              "format": "ipv6"
+            }
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "mac": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{2}:){5}[0-9a-f]{2}$"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "nat": {
+          "type": "object",
+          "properties": {
+            "ip": {
+              "type": "string",
+              "anyOf": [
+                {
+                  "format": "ipv4"
+                },
+                {
+                  "format": "ipv6"
+                }
+              ]
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            }
+          }
+        }
+      }
+    },
+    "shared_destination_2": {
+      "type": "object",
+      "properties": {
+        "ip": {
+          "type": "string",
+          "anyOf": [
+            {
+              "format": "ipv4"
+            },
+            {
+              "format": "ipv6"
+            }
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "mac": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{2}:){5}[0-9a-f]{2}$"
+        },
+        "bytes": {
+          "type": "integer"
+        },
+        "packets": {
+          "type": "integer"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "as": {
+          "type": "object",
+          "properties": {
+            "number": {
+              "type": "integer"
+            },
+            "organization": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "geo": {
+          "type": "object",
+          "properties": {
+            "country_iso_code": {
+              "type": "string"
+            },
+            "city_name": {
+              "type": "string"
+            },
+            "location": {
+              "type": "object",
+              "properties": {
+                "lat": {
+                  "type": "number"
+                },
+                "lon": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "lat",
+                "lon"
+              ]
+            }
+          }
+        },
+        "nat": {
+          "type": "object",
+          "properties": {
+            "ip": {
+              "type": "string",
+              "anyOf": [
+                {
+                  "format": "ipv4"
+                },
+                {
+                  "format": "ipv6"
+                }
+              ]
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            }
+          }
+        }
+      }
+    },
+    "shared_destination_3": {
+      "type": "object",
+      "properties": {
+        "ip": {
+          "type": "string",
+          "anyOf": [
+            {
+              "format": "ipv4"
+            },
+            {
+              "format": "ipv6"
+            }
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "mac": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{2}:){5}[0-9a-f]{2}$"
+        },
+        "bytes": {
+          "type": "integer"
+        },
+        "packets": {
+          "type": "integer"
+        },
+        "as": {
+          "type": "object",
+          "properties": {
+            "number": {
+              "type": "integer"
+            },
+            "organization": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "geo": {
+          "type": "object",
+          "properties": {
+            "country_iso_code": {
+              "type": "string"
+            },
+            "city_name": {
+              "type": "string"
+            },
+            "location": {
+              "type": "object",
+              "properties": {
+                "lat": {
+                  "type": "number"
+                },
+                "lon": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "lat",
+                "lon"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,67 @@
+# Seshat Device Tracker portal (the SSO lookup page), as installed by the seshat-device-tracker
+# .deb/.rpm (docs/packaging.md, docs/device-tracker-portal.md).
+#   configuration  /etc/seshat/device-tracker.env          (yours; kept on upgrade and on remove)
+#   secret key     /etc/seshat/device-tracker-secret.env   (the PORTAL's own key, generated once by the package; root-only, 0600)
+#   state          /var/lib/seshat-device-tracker          (SQLite in modes push/api/db; mode 0700; never deleted by the package)
+# The portal runs as its own user (seshat-tracker), separate from the gateway's (seshat): it is the
+# component meant for users outside the collectors' network, so a flaw in it must not reach the gateway's
+# database, queues or secret key. It never reads /etc/seshat/secret.env.
+[Unit]
+Description=Seshat Device Tracker portal
+Documentation=https://github.com/Root-Chain-Ventures-LLC/RCV-Seshat/blob/main/docs/device-tracker-portal.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=seshat-tracker
+Group=seshat-tracker
+ExecStart=/usr/bin/device-tracker
+Environment=SESHAT_DATA_DIR=/var/lib/seshat-device-tracker
+Environment=SESHAT_LISTEN=:8081
+Environment=SESHAT_PORTAL_MODE=push
+EnvironmentFile=-/etc/seshat/device-tracker-secret.env
+EnvironmentFile=-/etc/seshat/device-tracker.env
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+# SIGTERM stops being ready, keeps serving briefly and closes cleanly (SESHAT_DRAIN_GRACE).
+TimeoutStopSec=40
+
+# Its own state directory, owned by seshat-tracker. Mode "shared" with SQLite cannot read the gateway's
+# directory any more (by design); use PostgreSQL for shared mode (docs/device-tracker-portal.md).
+StateDirectory=seshat-device-tracker
+StateDirectoryMode=0700
+UMask=0077
+# The portal listens on an unprivileged port and needs no capabilities at all. To serve 443 directly,
+# add CAP_NET_BIND_SERVICE to both lines in a drop-in (or put a reverse proxy in front).
+AmbientCapabilities=
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+RemoveIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

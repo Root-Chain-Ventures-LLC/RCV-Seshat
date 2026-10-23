@@ -1,0 +1,80 @@
+# Seshat telemetry gateway, as installed by the seshat .deb/.rpm (docs/packaging.md).
+#   configuration  /etc/seshat/seshat.env      (yours; kept on upgrade and on remove)
+#   secret key     /etc/seshat/secret.env      (generated once by the package when missing; root-only, 0600)
+#   state          /var/lib/seshat             (SQLite, queues, MIB uploads; mode 0700; never deleted by the package)
+#   vendor packs   /usr/share/seshat/packs
+# High availability needs extra capabilities: copy the matching file from
+# /usr/share/seshat/systemd/drop-ins/ to /etc/systemd/system/seshat.service.d/ (docs/ha.md).
+[Unit]
+Description=Seshat telemetry gateway
+Documentation=https://github.com/Root-Chain-Ventures-LLC/RCV-Seshat/blob/main/docs/packaging.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=seshat
+Group=seshat
+ExecStart=/usr/bin/seshat
+# Defaults for a host install; anything in the environment files below wins over these.
+Environment=SESHAT_DATA_DIR=/var/lib/seshat
+Environment=SESHAT_PACKS_DIR=/usr/share/seshat/packs
+Environment=SESHAT_LISTEN=:8080
+Environment=SESHAT_SNMP_TRAP_LISTEN=:162
+Environment=SESHAT_SYSLOG_UDP_LISTEN=:514
+Environment=SESHAT_SYSLOG_TCP_LISTEN=:514
+# Read in this order; a later file overrides an earlier one, so a key set in seshat.env wins.
+EnvironmentFile=-/etc/seshat/secret.env
+EnvironmentFile=-/etc/seshat/seshat.env
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+# SIGTERM releases any virtual address, keeps serving for SESHAT_DRAIN_GRACE (3 s), then waits up to
+# SESHAT_DRAIN_TIMEOUT (20 s) for the destination queues to empty. Raise this with those two.
+TimeoutStopSec=40
+
+# A fixed system user (created by the package), not DynamicUser: the state directory, the queues and
+# any MIB uploads must keep one owner across upgrades and restarts.
+StateDirectory=seshat
+StateDirectoryMode=0700
+UMask=0077
+# Binding the standard ports 162 and 514 is the only privilege by default. The drop-ins add
+# CAP_NET_ADMIN / CAP_NET_RAW for VRRP, the anycast speaker and the source-preserving NMS relay.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+
+# The file system is read-only except the state directory (StateDirectory= makes it writable). Something
+# else the service must write, for example a SESHAT_OUTPUT_DIR elsewhere, needs a drop-in with
+# ReadWritePaths=/that/directory.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+RemoveIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# Other users' processes are invisible, and /proc shows only process directories.
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+# The binary is a static Go program (SQLite is pure Go): nothing needs writable-and-executable memory.
+MemoryDenyWriteExecute=yes
+# AF_NETLINK: interface and address discovery. The VRRP drop-in adds AF_PACKET (gratuitous ARP).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+# The ordinary service system calls; no privileged or resource-management ones (the same filter the
+# edge unit has run under). The capability drop-ins need only socket and netlink calls from the allowed set.
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

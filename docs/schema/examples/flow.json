@@ -1,0 +1,95 @@
+{
+  "@timestamp": "2026-10-12T14:03:05.000Z",
+  "ecs": { "version": "8.11.0" },
+  "data_stream": { "type": "logs", "dataset": "seshat.flow", "namespace": "exo" },
+  "event": {
+    "kind": "event",
+    "category": ["network"],
+    "type": ["connection", "end"],
+    "action": "flow",
+    "dataset": "seshat.flow",
+    "module": "seshat",
+    "id": "01K7XEXAMPLE0FLOW0000001",
+    "created": "2026-10-12T14:03:07.100Z",
+    "start": "2026-10-12T14:02:41.000Z",
+    "end": "2026-10-12T14:03:05.000Z",
+    "duration": 24000000000
+  },
+  "observer": {
+    "vendor": "Example Org",
+    "product": "Seshat",
+    "version": "0.1.0",
+    "name": "collector-1.example.com",
+    "type": "gateway"
+  },
+  "host": { "name": "switch3.example.com", "ip": ["192.0.2.11"] },
+  "source": {
+    "ip": "192.0.2.50",
+    "port": 49822,
+    "mac": "02:00:5e:20:00:07",
+    "bytes": 1843200,
+    "packets": 12000,
+    "as": { "number": 64500 }
+  },
+  "destination": {
+    "ip": "198.51.100.20",
+    "port": 443,
+    "as": { "number": 64501 }
+  },
+  "network": {
+    "transport": "tcp",
+    "iana_number": "6",
+    "type": "ipv4",
+    "protocol": "https",
+    "direction": "ingress",
+    "bytes": 1843200,
+    "packets": 12000,
+    "community_id": "1:YSgEowGgu1HXOlTuZJGj4Py0lXA=",
+    "vlan": { "id": "120" }
+  },
+  "related": { "ip": ["192.0.2.50", "198.51.100.20"], "hosts": ["switch3.example.com"] },
+  "seshat": {
+    "schema_version": "1.0",
+    "source": {
+      "listener": "ipfix-udp-default",
+      "input": "flow",
+      "protocol": "udp",
+      "ip": "192.0.2.11",
+      "port": 52055,
+      "site": "example-site-a"
+    },
+    "device": {
+      "status": "known",
+      "id": "dev-0003",
+      "name": "switch3.example.com",
+      "site": "example-site-a",
+      "role": "access-switch"
+    },
+    "enrichment": { "level": "full", "sources": ["inventory"] },
+    "flow": {
+      "version": "ipfix",
+      "exporter": "192.0.2.11",
+      "domain": 1,
+      "template": 256,
+      "sampling_rate": 100,
+      "scaled": true,
+      "bytes_raw": 18432,
+      "packets_raw": 120,
+      "tcp_flags": 27,
+      "tcp_flags_names": ["FIN", "SYN", "PSH", "ACK"],
+      "tos": 0,
+      "dscp": 0,
+      "input_ifindex": 10114,
+      "output_ifindex": 10101,
+      "input_ifname": "GigabitEthernet1/0/14",
+      "output_ifname": "GigabitEthernet1/0/1",
+      "next_hop": "192.0.2.1",
+      "src_mask": 24,
+      "dst_mask": 24,
+      "src_vlan": 120,
+      "dst_vlan": 30,
+      "end_reason": "end-of-flow",
+      "ie": { "32473.exampleIe": "7" }
+    }
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "index_patterns": [
+    "logs-seshat.device-*"
+  ],
+  "data_stream": {},
+  "priority": 200,
+  "version": 1,
+  "composed_of": [
+    "seshat-core"
+  ],
+  "_meta": {
+    "managed_by": "seshat",
+    "seshat_schema_version": "1.0",
+    "ecs_version": "8.11.0",
+    "description": "Seshat seshat.device data streams: device knowledge base records."
+  },
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": 1,
+        "number_of_replicas": 1
+      }
+    },
+    "mappings": {
+      "properties": {
+        "seshat": {
+          "dynamic": false,
+          "properties": {
+            "device": {
+              "properties": {
+                "sys_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "sys_object_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "engine_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "exporter_ids": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "source": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "revision": {
+                  "type": "long"
+                },
+                "interfaces": {
+                  "type": "nested",
+                  "properties": {
+                    "index": {
+                      "type": "long"
+                    },
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "alias": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "speed_bps": {
+                      "type": "long"
+                    },
+                    "type": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "admin_status": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "oper_status": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "provenance": {
+                  "type": "flat_object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

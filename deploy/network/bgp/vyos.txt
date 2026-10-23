@@ -1,0 +1,49 @@
+# VyOS 1.4: Seshat anycast, three nodes, IPv4 and IPv6, one AS for all nodes.
+# Documentation-range addresses and private ASNs; replace them. Enter in configure mode, then commit.
+#
+# VyOS is Linux with FRR: hash on source and destination address (the Linux default):
+#   sysctl net.ipv4.fib_multipath_hash_policy=0   and   net.ipv6.fib_multipath_hash_policy=0
+# (do not switch to layer-4 hashing, it would spread one exporter over several nodes).
+
+set policy prefix-list SESHAT-IN4 rule 10 action permit
+set policy prefix-list SESHAT-IN4 rule 10 prefix 198.51.100.10/32
+set policy prefix-list SESHAT-IN4 rule 100 action deny
+set policy prefix-list SESHAT-IN4 rule 100 prefix 0.0.0.0/0
+set policy prefix-list SESHAT-IN4 rule 100 le 32
+set policy prefix-list DENY-ALL4 rule 10 action deny
+set policy prefix-list DENY-ALL4 rule 10 prefix 0.0.0.0/0
+set policy prefix-list DENY-ALL4 rule 10 le 32
+set policy prefix-list6 SESHAT-IN6 rule 10 action permit
+set policy prefix-list6 SESHAT-IN6 rule 10 prefix 2001:db8:100::10/128
+set policy prefix-list6 SESHAT-IN6 rule 100 action deny
+set policy prefix-list6 SESHAT-IN6 rule 100 prefix ::/0
+set policy prefix-list6 SESHAT-IN6 rule 100 le 128
+set policy prefix-list6 DENY-ALL6 rule 10 action deny
+set policy prefix-list6 DENY-ALL6 rule 10 prefix ::/0
+set policy prefix-list6 DENY-ALL6 rule 10 le 128
+
+set protocols bgp system-as 65000
+set protocols bgp parameters router-id 192.0.2.1
+set protocols bgp address-family ipv4-unicast maximum-paths ebgp 8
+set protocols bgp address-family ipv6-unicast maximum-paths ebgp 8
+
+set protocols bgp neighbor 192.0.2.11 remote-as 65010
+set protocols bgp neighbor 192.0.2.11 description 'Seshat node 1'
+set protocols bgp neighbor 192.0.2.11 timers holdtime 9
+set protocols bgp neighbor 192.0.2.11 timers keepalive 3
+set protocols bgp neighbor 192.0.2.11 address-family ipv4-unicast prefix-list import SESHAT-IN4
+set protocols bgp neighbor 192.0.2.11 address-family ipv4-unicast prefix-list export DENY-ALL4
+# set protocols bgp neighbor 192.0.2.11 password CHANGE-ME
+# set protocols bgp neighbor 192.0.2.11 bfd          (needs a responder on the node host)
+# Repeat for 192.0.2.12 ("Seshat node 2") and 192.0.2.13 ("Seshat node 3").
+
+set protocols bgp neighbor 2001:db8:ffff::11 remote-as 65010
+set protocols bgp neighbor 2001:db8:ffff::11 description 'Seshat node 1 (v6)'
+set protocols bgp neighbor 2001:db8:ffff::11 timers holdtime 9
+set protocols bgp neighbor 2001:db8:ffff::11 timers keepalive 3
+set protocols bgp neighbor 2001:db8:ffff::11 address-family ipv6-unicast prefix-list import SESHAT-IN6
+set protocols bgp neighbor 2001:db8:ffff::11 address-family ipv6-unicast prefix-list export DENY-ALL6
+# Repeat for ::12 and ::13.
+
+# Check:  show ip route 198.51.100.10/32     (several next hops)
+#         show bgp summary

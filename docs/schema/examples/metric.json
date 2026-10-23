@@ -1,0 +1,44 @@
+{
+  "@timestamp": "2026-10-12T14:03:05.000Z",
+  "ecs": { "version": "8.11.0" },
+  "data_stream": { "type": "logs", "dataset": "seshat.metric", "namespace": "exo" },
+  "event": {
+    "kind": "metric",
+    "category": ["network"],
+    "type": ["info"],
+    "dataset": "seshat.metric",
+    "module": "seshat",
+    "id": "01K7XEXAMPLE0METRIC0001",
+    "created": "2026-10-12T14:03:05.120Z"
+  },
+  "observer": {
+    "vendor": "Example Org",
+    "product": "Seshat",
+    "version": "0.1.0",
+    "name": "collector-1.example.com",
+    "type": "gateway"
+  },
+  "host": { "name": "switch3.example.com", "ip": ["192.0.2.11"] },
+  "related": { "ip": ["192.0.2.11"], "hosts": ["switch3.example.com"] },
+  "seshat": {
+    "schema_version": "1.0",
+    "source": { "listener": "switch3.example.com", "input": "telemetry", "protocol": "grpc", "ip": "192.0.2.11", "port": 57400, "site": "example-site-a" },
+    "device": {
+      "status": "known",
+      "id": "dev-0003",
+      "name": "switch3.example.com",
+      "site": "example-site-a",
+      "interface": { "name": "Ethernet1/1", "index": 10114 }
+    },
+    "enrichment": { "level": "full" },
+    "metric": {
+      "path": "/interfaces/interface[name=Ethernet1/1]/state/counters/in-octets",
+      "name": "in-octets",
+      "value": 1843200,
+      "value_type": "uint64",
+      "labels": { "interface": "Ethernet1/1" },
+      "source": "gnmi",
+      "subscription": "interface-counters"
+    }
+  }
+}

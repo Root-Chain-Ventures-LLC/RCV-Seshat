@@ -1,0 +1,59 @@
+# Seshat edge collector: the same image as compose.yaml, started with --role edge.
+# It dials the main server (outbound only), buffers to disk while the link is down and needs no database.
+#
+#   1. On the main server's Edges page add an edge and copy its one-time token.
+#   2. Put it in .env.edge (never commit it):
+#        SESHAT_EDGE_SERVER=https://seshat.example.com
+#        SESHAT_EDGE_ENROL_TOKEN=sht_enr_...
+#        # SESHAT_EDGE_CA_FILE=/data/server-ca.pem        (private CA: mount the PEM into the volume)
+#   3. docker compose -f compose.edge.yaml --env-file .env.edge up -d
+#
+# The token is used once, at the first start; afterwards the identity lives in the data volume
+# (edge.json) and the variables can be removed. Status page: http://127.0.0.1:8082
+#
+# One-box evaluation against the main compose.yaml stack (the main server speaks plain HTTP on :8080,
+# so enrolment needs the explicit evaluation flag, which is logged loudly). compose.yaml publishes :8080
+# on the loopback interface only, which the edge container cannot reach through host.docker.internal:
+# set SESHAT_BIND=0.0.0.0 in the main stack's .env for the duration of the evaluation.
+#   SESHAT_EDGE_SERVER=http://host.docker.internal:8080  SESHAT_EDGE_INSECURE_SKIP_VERIFY=1
+#
+# Hardened like compose.yaml: read-only root file system, no capabilities, no new privileges.
+name: seshat-edge
+
+# Applied to every service below (YAML anchors do not cross files, so each compose file repeats it).
+x-hardened: &hardened
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 512
+
+services:
+  seshat-edge:
+    <<: *hardened
+    image: ${SESHAT_IMAGE:-ghcr.io/root-chain-ventures-llc/seshat:0.2.0}
+    restart: unless-stopped
+    command: ["--role", "edge"]
+    env_file:
+      - path: .env.edge
+        required: false
+    environment:
+      SESHAT_ROLE: edge
+      SESHAT_LISTEN: ":8082"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Streaming telemetry (57400/tcp dial-out) is not served by the edge role in this release, so no port is published for it.
+    ports:
+      - "127.0.0.1:8082:8082"   # status page, local only
+      # Devices send here: allow only your device networks to reach these with the host firewall.
+      - "162:1162/udp"
+      - "514:1514/udp"
+      - "514:1514/tcp"
+    volumes:
+      - seshat-edge-data:/data
+
+volumes:
+  seshat-edge-data:

@@ -1,0 +1,49 @@
+# Overlay: a second Seshat replica on the same host, sharing the PostgreSQL of compose.postgres.yaml.
+# For trying change fan-out, leader election and failover on one machine; real clusters run replicas
+# on separate hosts (see docs/storage.md).
+#   docker compose -f compose.yaml -f compose.postgres.yaml -f compose.replicas.yaml up -d
+# Replica 1 keeps the usual ports; replica 2 answers on :8081 (UI/API) and shifted listener ports.
+# Both need the SAME SESHAT_SECRET_KEY in .env (destination credentials and SNMPv3 keys are sealed with it).
+name: seshat
+
+# Applied to every service below (YAML anchors do not cross files, so each compose file repeats it).
+x-hardened: &hardened
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 512
+
+services:
+  seshat:
+    environment:
+      SESHAT_INSTANCE: seshat-1
+  seshat2:
+    <<: *hardened
+    image: ${SESHAT_IMAGE:-ghcr.io/root-chain-ventures-llc/seshat:0.2.0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      seshat:
+        condition: service_started
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      SESHAT_DEV: ${SESHAT_DEV:-0}
+      SESHAT_INSTANCE: seshat-2
+      SESHAT_DATABASE_URL: ${SESHAT_DATABASE_URL:-postgres://seshat:${SESHAT_POSTGRES_PASSWORD:?}@postgres:5432/seshat?sslmode=disable}
+    ports:
+      - "${SESHAT_BIND:-127.0.0.1}:8081:8080"
+      - "1163:1162/udp"
+      - "1515:1514/udp"
+      - "1515:1514/tcp"
+    volumes:
+      - seshat-data2:/data
+
+volumes:
+  seshat-data2:

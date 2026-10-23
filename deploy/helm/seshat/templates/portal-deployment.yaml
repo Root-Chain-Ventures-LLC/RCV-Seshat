@@ -1,0 +1,254 @@
+{{- if .Values.portal.enabled }}
+{{- include "seshat.validate" . }}
+{{- $m := .Values.portal.mode }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "seshat.fullname" . }}-device-tracker
+  labels:
+    {{- include "seshat.labels" . | nindent 4 }}
+    app.kubernetes.io/component: device-tracker
+spec:
+  replicas: {{ .Values.portal.replicaCount }}
+  {{- if and (not (eq $m "shared")) (not .Values.portal.database.existingSecret) (gt (int .Values.portal.replicaCount) 1) }}
+  {{- fail "portal.replicaCount > 1 needs a shared store: portal.mode=shared, or portal.database.existingSecret (PostgreSQL) for push/api/db" }}
+  {{- end }}
+  strategy:
+    type: {{ ternary "Recreate" "RollingUpdate" (and .Values.portal.persistence.enabled (not (or (eq $m "shared") .Values.portal.database.existingSecret))) }}
+  selector:
+    matchLabels:
+      {{- include "seshat.selector" (list . "device-tracker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "seshat.podLabels" (list . "device-tracker") | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "seshat.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: device-tracker
+          image: {{ include "seshat.portalImage" . | quote }}
+          imagePullPolicy: {{ .Values.portal.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: SESHAT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default .Values.secrets.existingSecret .Values.portal.secrets.existingSecret }}
+                  key: {{ .Values.secrets.secretKeyKey }}
+            - name: SESHAT_DEV
+              value: "0"
+            - name: SESHAT_LISTEN
+              value: ":8081"
+            - name: SESHAT_DATA_DIR
+              value: /data
+            - name: SESHAT_LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            - name: SESHAT_PORTAL_MODE
+              value: {{ $m | quote }}
+            - name: SESHAT_COOKIE_SECURE
+              value: {{ .Values.ui.cookieSecure | quote }}
+            {{- if .Values.portal.ingress.enabled }}
+            - name: SESHAT_TRUST_PROXY
+              value: "1"
+            {{- end }}
+            {{- if .Values.portal.publicURL }}
+            - name: SESHAT_PUBLIC_URL
+              value: {{ .Values.portal.publicURL | quote }}
+            {{- end }}
+            {{- if eq $m "shared" }}
+            {{- include "seshat.databaseEnv" . | nindent 12 }}
+            {{- if .Values.portal.readOnlyDatabase.existingSecret }}
+            - name: SESHAT_PORTAL_DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.portal.readOnlyDatabase.existingSecret }}
+                  key: {{ .Values.portal.readOnlyDatabase.key }}
+            {{- end }}
+            {{- else }}
+            {{- with .Values.portal.database.existingSecret }}
+            - name: SESHAT_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.portal.database.key }}
+            {{- end }}
+            {{- end }}
+            {{- if eq $m "db" }}
+            - name: SESHAT_PORTAL_DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.portal.readOnlyDatabase.existingSecret }}
+                  key: {{ .Values.portal.readOnlyDatabase.key }}
+            {{- end }}
+            {{- if eq $m "api" }}
+            - name: SESHAT_PORTAL_API_URL
+              value: {{ .Values.portal.api.url | quote }}
+            - name: SESHAT_PORTAL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.portal.api.existingSecret }}
+                  key: {{ .Values.portal.api.key }}
+            {{- end }}
+            {{- if and (eq $m "push") .Values.portal.sync.existingSecret }}
+            - name: SESHAT_PORTAL_SYNC_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.portal.sync.existingSecret }}
+                  key: {{ .Values.portal.sync.key }}
+            {{- end }}
+            {{- with .Values.portal.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.portal.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - {name: http, containerPort: 8081, protocol: TCP}
+          startupProbe:
+            httpGet: {path: /api/health, port: http}
+            periodSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: {path: /api/health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet: {path: /api/ready, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 4
+            failureThreshold: 2
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/device-tracker", "--drain", "--drain-timeout=5s", "--drain-hold={{ .Values.drain.holdSeconds }}s"]
+          {{- with .Values.portal.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        - name: data
+          {{- if and .Values.portal.persistence.enabled (not (eq $m "shared")) (not .Values.portal.database.existingSecret) }}
+          persistentVolumeClaim:
+            claimName: {{ include "seshat.fullname" . }}-device-tracker
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- if and .Values.portal.persistence.enabled (not (eq $m "shared")) (not .Values.portal.database.existingSecret) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "seshat.fullname" . }}-device-tracker
+  labels:
+    {{- include "seshat.labels" . | nindent 4 }}
+    app.kubernetes.io/component: device-tracker
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.portal.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.portal.persistence.size }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "seshat.fullname" . }}-device-tracker
+  labels:
+    {{- include "seshat.labels" . | nindent 4 }}
+    app.kubernetes.io/component: device-tracker
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "seshat.selector" (list . "device-tracker") | nindent 4 }}
+  ports:
+    - {name: http, port: 80, targetPort: http, protocol: TCP}
+{{- if .Values.portal.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "seshat.fullname" . }}-device-tracker
+  labels:
+    {{- include "seshat.labels" . | nindent 4 }}
+    app.kubernetes.io/component: device-tracker
+  {{- with .Values.portal.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.portal.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.portal.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.portal.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ include "seshat.fullname" $ }}-device-tracker
+                port: {name: http}
+          {{- end }}
+    {{- end }}
+{{- end }}
+{{- if and .Values.pdb.enabled (gt (int .Values.portal.replicaCount) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "seshat.fullname" . }}-device-tracker
+  labels:
+    {{- include "seshat.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "seshat.selector" (list . "device-tracker") | nindent 6 }}
+{{- end }}
+{{- end }}

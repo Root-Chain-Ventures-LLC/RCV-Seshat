@@ -1,0 +1,368 @@
+name: publish
+
+# Publishes a Seshat release for users. The images and packages are BUILT in a private source repository, which
+# signs them, pushes the images to private staging names, uploads the packages to a private release, commits the
+# current copy of this repository's files here and then dispatches `publish-release` with the version and the
+# exact image digests. This workflow:
+#
+#   1. copies both images BY DIGEST to the public names (so the packages are created by, and linked to, THIS
+#      repository) together with their signature and attestation objects, and refuses to succeed unless both
+#      pull ANONYMOUSLY at the same digest and verify against the committed cosign.pub;
+#   2. downloads the private release's assets, checks SHA256SUMS against the files and SHA256SUMS.sig against the
+#      COMMITTED cosign.pub (an unsigned release is refused);
+#   3. creates the Release (title "Seshat X.Y.Z", empty notes, the install artifacts as assets), then downloads
+#      every asset anonymously and compares it with SHA256SUMS;
+#   4. removes every older release and tag, so only the newest stable release is public.
+#
+# Secrets (repository secrets of this repository):
+#   GHCR_READ_TOKEN    reads the private staging packages. GITHUB_TOKEN cannot: a package is readable only by the
+#                      repository it is linked to. A classic personal access token with read:packages.
+#   SOURCE_READ_TOKEN  reads the private repository's release assets (fine-grained token, that one repository,
+#                      Contents: read). Optional: when it is not set GHCR_READ_TOKEN is used, which then needs
+#                      the repo scope as well.
+#   GITHUB_TOKEN       writes the public packages, the Release and the pruning (permissions below).
+#
+# Re-run by hand with the workflow_dispatch inputs if a dispatch was missed. A run only ever publishes the
+# version it is given: the checked-out files must be that version's (the chart's appVersion says so).
+
+on:
+  repository_dispatch:
+    types: [publish-release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, e.g. 0.2.0 (no leading v)'
+        required: true
+      seshat_digest:
+        description: 'Digest of the staging seshat image, sha256:...'
+        required: true
+      tracker_digest:
+        description: 'Digest of the staging seshat-device-tracker image, sha256:...'
+        required: true
+      source_repo:
+        description: 'owner/name of the private source repository that holds the release assets'
+        required: true
+      prerelease:
+        description: 'Prerelease (does not move :latest, does not prune)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.event.client_payload.version || github.event.inputs.version }}
+  cancel-in-progress: false
+
+env:
+  STAGING_IMAGE: ghcr.io/root-chain-ventures-llc/seshat-build
+  STAGING_PORTAL_IMAGE: ghcr.io/root-chain-ventures-llc/seshat-device-tracker-build
+  PUBLIC_IMAGE: ghcr.io/root-chain-ventures-llc/seshat
+  PUBLIC_PORTAL_IMAGE: ghcr.io/root-chain-ventures-llc/seshat-device-tracker
+  # cosign, pinned: the release is downloaded from GitHub and refused unless it matches this SHA-256.
+  COSIGN_VERSION: '3.1.4'
+  COSIGN_SHA256: '424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Resolve and validate the inputs
+        id: in
+        env:
+          # Via env, never interpolated into the script: dispatch inputs are text someone typed.
+          VERSION: ${{ github.event.client_payload.version || github.event.inputs.version }}
+          SESHAT_DIGEST: ${{ github.event.client_payload.seshat_digest || github.event.inputs.seshat_digest }}
+          TRACKER_DIGEST: ${{ github.event.client_payload.tracker_digest || github.event.inputs.tracker_digest }}
+          SOURCE_REPO: ${{ github.event.client_payload.source_repo || github.event.inputs.source_repo }}
+          PRERELEASE: ${{ github.event.client_payload.prerelease || github.event.inputs.prerelease || 'false' }}
+          SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::version '$VERSION' is not a semantic version without a leading v"; exit 1
+          fi
+          for d in "$SESHAT_DIGEST" "$TRACKER_DIGEST"; do
+            if ! printf '%s' "$d" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+              echo "::error::digest '$d' is not sha256:<64 hex>"; exit 1
+            fi
+          done
+          case "$PRERELEASE" in true|false) ;; *) echo "::error::prerelease must be true or false"; exit 1 ;; esac
+          if ! printf '%s' "$SOURCE_REPO" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
+            echo "::error::source_repo '$SOURCE_REPO' is not owner/name"; exit 1
+          fi
+          owner="${SOURCE_REPO%%/*}"
+          if [ "${owner,,}" != "${GITHUB_REPOSITORY_OWNER,,}" ] || [ "${SOURCE_REPO,,}" = "${GITHUB_REPOSITORY,,}" ]; then
+            echo "::error::source_repo must be another repository of $GITHUB_REPOSITORY_OWNER"; exit 1
+          fi
+          if [ -z "$GHCR_READ_TOKEN" ]; then
+            echo "::error::repository secret GHCR_READ_TOKEN is not set: cannot read the staging images"; exit 1
+          fi
+          # The files in this checkout must be this version's, or the Release would be cut on the wrong commit.
+          if ! grep -Eq "^appVersion: \"?${VERSION//./\\.}\"?\$" deploy/helm/seshat/Chart.yaml; then
+            echo "::error::the checked-out files are not version $VERSION (deploy/helm/seshat/Chart.yaml appVersion); the source repository commits them before it dispatches"
+            exit 1
+          fi
+          [ -s cosign.pub ] || { echo "::error::cosign.pub is not committed in this repository"; exit 1; }
+          {
+            echo "version=$VERSION"
+            echo "seshat_digest=$SESHAT_DIGEST"
+            echo "tracker_digest=$TRACKER_DIGEST"
+            echo "source_repo=$SOURCE_REPO"
+            echo "prerelease=$PRERELEASE"
+            echo "tag=v$VERSION"
+            echo "head=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Publishing $VERSION (prerelease=$PRERELEASE, source ${SOURCE_SHA:-unknown}) from $SOURCE_REPO"
+
+      - name: Install skopeo and cosign
+        run: |
+          set -euo pipefail
+          if ! command -v skopeo >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq skopeo
+          fi
+          skopeo --version
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/bin/cosign" \
+            "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "${COSIGN_SHA256}  $RUNNER_TEMP/bin/cosign" | sha256sum -c -
+          chmod 0755 "$RUNNER_TEMP/bin/cosign"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Copy the images by digest to the public names, with their signatures
+        # Two credentials against one registry: the read token can see the private staging packages,
+        # GITHUB_TOKEN owns the public ones. --preserve-digests makes skopeo fail rather than rewrite a
+        # manifest, so what users pull is byte for byte what the private build produced. The signature,
+        # SBOM and provenance objects of an image are stored next to it under tags derived from its digest
+        # (sha256-<hex>, sha256-<hex>.sig, sha256-<hex>.att, ...); they stay valid under the new name because
+        # they sign the digest, so they are copied too.
+        env:
+          SRC_CREDS: x:${{ secrets.GHCR_READ_TOKEN }}
+          DST_CREDS: ${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.in.outputs.version }}
+          PRERELEASE: ${{ steps.in.outputs.prerelease }}
+          SESHAT_DIGEST: ${{ steps.in.outputs.seshat_digest }}
+          TRACKER_DIGEST: ${{ steps.in.outputs.tracker_digest }}
+        run: |
+          set -euo pipefail
+          copy_image() {
+            local staging="$1" public="$2" digest="$3" hex tags t
+            hex="${digest#sha256:}"
+            skopeo copy --all --preserve-digests --src-creds "$SRC_CREDS" --dest-creds "$DST_CREDS" \
+              "docker://$staging@$digest" "docker://$public:$VERSION"
+            tags=$(skopeo list-tags --creds "$SRC_CREDS" "docker://$staging" | jq -r '.Tags[]' | grep -E "^sha256-${hex}(\.[a-z0-9]+)?\$" || true)
+            if [ -z "$tags" ]; then
+              echo "::warning::$staging@$digest has no signature objects; the signature check below will fail unless the release is signed another way"
+            fi
+            for t in $tags; do
+              skopeo copy --all --preserve-digests --src-creds "$SRC_CREDS" --dest-creds "$DST_CREDS" \
+                "docker://$staging:$t" "docker://$public:$t"
+              echo "copied $t"
+            done
+            if [ "$PRERELEASE" = "false" ]; then
+              skopeo copy --all --preserve-digests --src-creds "$DST_CREDS" --dest-creds "$DST_CREDS" \
+                "docker://$public@$digest" "docker://$public:latest"
+            fi
+          }
+          copy_image "$STAGING_IMAGE" "$PUBLIC_IMAGE" "$SESHAT_DIGEST"
+          copy_image "$STAGING_PORTAL_IMAGE" "$PUBLIC_PORTAL_IMAGE" "$TRACKER_DIGEST"
+
+      - name: Verify both images pull anonymously at the same digest
+        # The whole point of publishing from here. No credentials of any kind: if a package came out private,
+        # or the copy changed a digest, the release fails now instead of being discovered by the first user.
+        env:
+          VERSION: ${{ steps.in.outputs.version }}
+          PRERELEASE: ${{ steps.in.outputs.prerelease }}
+          SESHAT_DIGEST: ${{ steps.in.outputs.seshat_digest }}
+          TRACKER_DIGEST: ${{ steps.in.outputs.tracker_digest }}
+        run: |
+          set -euo pipefail
+          check_image() {
+            local image="$1" digest="$2" repo resp token tag got
+            repo="${image#ghcr.io/}"
+            resp=$(curl -sS "https://ghcr.io/token?scope=repository:$repo:pull&service=ghcr.io")
+            token=$(printf '%s' "$resp" | jq -r '.token // empty' 2>/dev/null || true)
+            if [ -z "$token" ]; then
+              echo "::error::anonymous registry token request was refused: the package is not public. Response: $resp"
+              echo "::error::Fix: github.com/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/package/${repo##*/} > Package settings > Change visibility > Public, then re-run this workflow."
+              return 1
+            fi
+            for tag in "$VERSION" $([ "$PRERELEASE" = "false" ] && echo latest); do
+              got=$(curl -sS -o /dev/null -D - \
+                -H "Authorization: Bearer $token" \
+                -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+                "https://ghcr.io/v2/$repo/manifests/$tag" \
+                | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest" {print $2}')
+              if [ "$got" != "$digest" ]; then
+                echo "::error::$image:$tag resolves to '${got:-nothing}', expected $digest"
+                return 1
+              fi
+              echo "$image:$tag -> $got (anonymous, matches)"
+            done
+          }
+          check_image "$PUBLIC_IMAGE" "$SESHAT_DIGEST"
+          check_image "$PUBLIC_PORTAL_IMAGE" "$TRACKER_DIGEST"
+
+      - name: Verify the image signatures and attestations against the committed key
+        env:
+          SESHAT_DIGEST: ${{ steps.in.outputs.seshat_digest }}
+          TRACKER_DIGEST: ${{ steps.in.outputs.tracker_digest }}
+        run: |
+          set -euo pipefail
+          # An empty Docker config: nothing here may authenticate, exactly like a user.
+          export DOCKER_CONFIG="$RUNNER_TEMP/anonymous-docker"
+          mkdir -p "$DOCKER_CONFIG"
+          for ref in "$PUBLIC_IMAGE@$SESHAT_DIGEST" "$PUBLIC_PORTAL_IMAGE@$TRACKER_DIGEST"; do
+            cosign verify --key cosign.pub --insecure-ignore-tlog=true "$ref" >/dev/null
+            cosign verify-attestation --key cosign.pub --insecure-ignore-tlog=true --type spdxjson "$ref" >/dev/null
+            cosign verify-attestation --key cosign.pub --insecure-ignore-tlog=true --type slsaprovenance1 "$ref" >/dev/null
+            echo "verified signature, SBOM and provenance of $ref"
+          done
+
+      - name: Download the private release's assets and verify them
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_READ_TOKEN || secrets.GHCR_READ_TOKEN }}
+          SOURCE_REPO: ${{ steps.in.outputs.source_repo }}
+          TAG: ${{ steps.in.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          gh release download "$TAG" --repo "$SOURCE_REPO" --dir assets
+          cd assets
+          ls -la
+          for f in SHA256SUMS SHA256SUMS.sig cosign.pub; do
+            if [ ! -s "$f" ]; then
+              echo "::error::the release has no $f: it is unsigned and will not be published"; exit 1
+            fi
+          done
+          # The key the release was signed with must be the key committed here.
+          cmp cosign.pub ../cosign.pub || { echo "::error::the release's cosign.pub differs from the committed cosign.pub"; exit 1; }
+          cosign verify-blob --key ../cosign.pub --signature SHA256SUMS.sig --insecure-ignore-tlog=true SHA256SUMS
+          # Every listed file is present with the listed hash, and nothing unlisted is present. A pre-release
+          # package name can contain a character GitHub rewrites in asset names; match those too.
+          norm() { printf '%s' "$1" | sed -E 's/[^A-Za-z0-9._+-]/./g'; }
+          fail=0
+          : > ../listed.txt
+          while read -r sum name; do
+            name="${name#\*}"
+            f="$name"
+            [ -f "$f" ] || f="$(norm "$name")"
+            if [ ! -f "$f" ]; then echo "::error::listed in SHA256SUMS but not in the release: $name"; fail=1; continue; fi
+            [ "$f" = "$name" ] || echo "::warning::$name was published as $f"
+            if [ "$(sha256sum "$f" | cut -d' ' -f1)" != "$sum" ]; then echo "::error::checksum mismatch: $f"; fail=1; fi
+            echo "$f" >> ../listed.txt
+          done < SHA256SUMS
+          for f in *; do
+            case "$f" in SHA256SUMS|SHA256SUMS.sig) continue ;; esac
+            grep -qxF "$f" ../listed.txt || { echo "::error::in the release but not covered by SHA256SUMS: $f"; fail=1; }
+          done
+          # Only install artifacts are ever published, and all of them must be there.
+          debs=0; rpms=0; tars=0; sboms=0
+          for f in *; do
+            case "$f" in
+              SHA256SUMS|SHA256SUMS.sig|cosign.pub|install-bundle.tar.gz) ;;
+              seshat_*_linux_amd64.tar.gz|seshat_*_linux_arm64.tar.gz) tars=$((tars + 1)) ;;
+              seshat_*.spdx.json|seshat-device-tracker_*.spdx.json) sboms=$((sboms + 1)) ;;
+              seshat_*.deb|seshat-device-tracker_*.deb|seshat-edge_*.deb) debs=$((debs + 1)) ;;
+              seshat-*.rpm) rpms=$((rpms + 1)) ;;
+              *) echo "::error::unexpected file in the release: $f"; fail=1 ;;
+            esac
+          done
+          [ -f install-bundle.tar.gz ] || { echo "::error::install-bundle.tar.gz is missing"; fail=1; }
+          if [ "$debs" -ne 6 ] || [ "$rpms" -ne 6 ] || [ "$tars" -ne 2 ] || [ "$sboms" -ne 3 ]; then
+            echo "::error::expected 6 .deb, 6 .rpm, 2 tarballs and 3 SBOMs, found $debs, $rpms, $tars, $sboms"; fail=1
+          fi
+          [ "$fail" -eq 0 ] || exit 1
+          echo "verified $(find . -type f | wc -l) assets against the signed SHA256SUMS"
+
+      - name: Cut the GitHub Release
+        # Created as a draft, filled, checked, then published: nobody sees a half-uploaded release.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.in.outputs.tag }}
+          VERSION: ${{ steps.in.outputs.version }}
+          PRERELEASE: ${{ steps.in.outputs.prerelease }}
+          HEAD_SHA: ${{ steps.in.outputs.head }}
+        run: |
+          set -euo pipefail
+          title="Seshat $VERSION"
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # A re-run: replace the assets, keep the tag.
+            gh release view "$TAG" --json assets -q '.assets[].name' | while read -r a; do
+              [ -n "$a" ] && gh release delete-asset "$TAG" "$a" --yes
+            done
+            gh release edit "$TAG" --title "$title" --notes "" --prerelease="$PRERELEASE"
+            gh release upload "$TAG" assets/* --clobber
+          else
+            gh release create "$TAG" assets/* --draft --target "$HEAD_SHA" --title "$title" --notes "" "${flags[@]}"
+            names=$(gh release view "$TAG" --json assets -q '.assets[].name' | sort)
+            want=$(cd assets && printf '%s\n' * | sort)
+            [ "$names" = "$want" ] || { echo "::error::the draft release does not hold exactly the verified assets"; exit 1; }
+            if [ "$PRERELEASE" = "false" ]; then flags=(--latest); else flags=(); fi
+            gh release edit "$TAG" --draft=false --prerelease="$PRERELEASE" "${flags[@]}"
+          fi
+          echo "Released $TAG: $(gh release view "$TAG" --json url -q .url)"
+
+      - name: Verify the public release anonymously
+        env:
+          TAG: ${{ steps.in.outputs.tag }}
+          VERSION: ${{ steps.in.outputs.version }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG"
+          curl -fsS -H 'Accept: application/vnd.github+json' "$api" -o release.json
+          [ "$(jq -r .name release.json)" = "Seshat $VERSION" ] || { echo "::error::release title is not 'Seshat $VERSION'"; exit 1; }
+          [ -z "$(jq -r '.body // ""' release.json)" ] || { echo "::error::release notes are not empty"; exit 1; }
+          [ "$(jq -r .draft release.json)" = "false" ] || { echo "::error::release is still a draft"; exit 1; }
+          mkdir -p anon
+          jq -r '.assets[].name' release.json | sort > anon-names.txt
+          (cd assets && printf '%s\n' * | sort) | diff - anon-names.txt || { echo "::error::published assets differ from the verified assets"; exit 1; }
+          while read -r name; do
+            curl -fsSL --retry 3 -o "anon/$name" "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$name"
+            cmp "anon/$name" "assets/$name" || { echo "::error::anonymous download of $name differs from the verified file"; exit 1; }
+          done < anon-names.txt
+          cd anon
+          cosign verify-blob --key ../cosign.pub --signature SHA256SUMS.sig --insecure-ignore-tlog=true SHA256SUMS
+          sha256sum -c --ignore-missing SHA256SUMS
+          echo "anonymous download of every asset matches the signed checksums"
+
+      # Only the current release stays public: once a stable release is out, delete every other release and
+      # tag in this repository. Skipped for a prerelease, and skipped when a newer version tag already exists
+      # (a backfill of an old version must never remove the newest).
+      - name: Remove older releases and tags
+        if: steps.in.outputs.prerelease == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.in.outputs.tag }}
+        run: |
+          set -euo pipefail
+          newest=$(gh api --paginate "repos/$GITHUB_REPOSITORY/tags?per_page=100" --jq '.[].name' \
+            | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -V | tail -n 1)
+          if [ "$newest" != "$TAG" ]; then
+            echo "::warning::$TAG is not the newest version tag (${newest:-none}); leaving older releases in place"
+            exit 0
+          fi
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[] | "\(.id) \(.tag_name)"' \
+            | while read -r id tag; do
+                [ "$tag" = "$TAG" ] && continue
+                gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+                echo "deleted release $tag"
+              done
+          gh api --paginate "repos/$GITHUB_REPOSITORY/tags?per_page=100" --jq '.[].name' \
+            | while read -r tag; do
+                [ "$tag" = "$TAG" ] && continue
+                gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
+                echo "deleted tag $tag"
+              done

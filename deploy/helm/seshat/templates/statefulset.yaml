@@ -1,0 +1,160 @@
+{{- include "seshat.validate" . }}
+{{- $role := ternary "collector" "all" .Values.roles.split }}
+{{- $hn := .Values.intake.hostNetwork.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "seshat.fullname" . }}
+  labels:
+    {{- include "seshat.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+spec:
+  replicas: {{ .Values.replicaCount }}
+  serviceName: {{ include "seshat.fullname" . }}-headless
+  # Pods are independent senders' endpoints, not an ordered cluster: start and stop them together.
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  {{- if .Values.persistence.enabled }}
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: {{ .Values.persistence.retentionWhenDeleted }}
+    whenScaled: {{ .Values.persistence.retentionWhenScaled }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "seshat.selector" (list . "collector") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "seshat.podLabels" (list . "collector") | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "seshat.serviceAccountName" . }}
+      automountServiceAccountToken: {{ eq .Values.leaderElection.mode "k8s-lease" }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $hn }}
+      # Host network: the pod listens on the node's own addresses, so source addresses are never rewritten.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      securityContext:
+        {{- include "seshat.podSecurityContext" . | nindent 8 }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or .Values.affinity $hn }}
+      affinity:
+        {{- with .Values.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if and $hn (not .Values.affinity.podAntiAffinity) }}
+        podAntiAffinity:
+          # Two pods on one node would fight for the same host ports.
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "seshat.selector" (list . "collector") | nindent 18 }}
+        {{- end }}
+      {{- end }}
+      {{- if .Values.topologySpread.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.topologySpread.maxSkew }}
+          topologyKey: {{ .Values.topologySpread.topologyKey }}
+          whenUnsatisfiable: {{ .Values.topologySpread.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              {{- include "seshat.selector" (list . "collector") | nindent 14 }}
+      {{- end }}
+      containers:
+        - name: seshat
+          image: {{ include "seshat.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "seshat.containerSecurityContext" . | nindent 12 }}
+          env:
+            {{- include "seshat.env" (list . $role) | nindent 12 }}
+            {{- include "seshat.listenerEnv" . | nindent 12 }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - {name: http, containerPort: {{ .Values.ui.containerPort }}, protocol: TCP}
+            {{- range $p := include "seshat.intakePorts" . | fromJsonArray }}
+            {{- if $p.on }}
+            - name: {{ $p.name }}
+              containerPort: {{ $p.cont }}
+              protocol: {{ $p.proto }}
+              {{- if $hn }}
+              hostPort: {{ $p.cont }}
+              {{- end }}
+            {{- end }}
+            {{- end }}
+          {{- include "seshat.probes" . | nindent 10 }}
+          lifecycle:
+            {{- include "seshat.preStop" (list "/seshat" .Values) | nindent 12 }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+            {{- if .Values.intake.ports.syslogTLS.enabled }}
+            - {name: syslog-tls, mountPath: /tls, readOnly: true}
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 128Mi}
+        {{- if not .Values.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- else if .Values.queue.bus.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.intake.ports.syslogTLS.enabled }}
+        - name: syslog-tls
+          secret:
+            secretName: {{ required "intake.syslogTLS.existingSecret is required when intake.ports.syslogTLS.enabled" .Values.intake.syslogTLS.existingSecret }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+  {{- if and .Values.persistence.enabled (not .Values.queue.bus.enabled) }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "seshat.selector" (list . "collector") | nindent 10 }}
+      spec:
+        accessModes: {{ toJson .Values.persistence.accessModes }}
+        {{- with .Values.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}

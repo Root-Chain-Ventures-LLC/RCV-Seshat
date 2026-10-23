@@ -1,0 +1,164 @@
+RCV Community License 1.1
+
+Licensed Work:  RCV Seshat
+Licensor:       Root Chain Ventures, LLC
+Copyright:      (c) 2026 Root Chain Ventures, LLC. All rights reserved.
+
+This RCV Community License (the "License") governs use of the Licensed Work
+identified above and its associated container images, installation and
+deployment artifacts, configuration, and documentation (collectively, the
+"Software"). By downloading, installing, copying, accessing, or using the
+Software, you ("you" or "Licensee") agree to the terms of this License. If you
+do not agree, do not download, install, or use the Software.
+
+The Software is proprietary. It is made available in object and container-image
+form only, together with the Deployment Artifacts needed to install it. No
+source code is provided or licensed under this License. The Software is not
+open-source software, and this License is not an open-source license.
+
+1. FREE USE
+   The Licensor grants you a worldwide, non-exclusive, non-transferable,
+   non-sublicensable, royalty-free license to download, install, and run the
+   unmodified Software on infrastructure you own or control, at no charge, if
+   you are within one or more of the following categories of Free Use:
+
+   (a) Personal use. You are an individual using the Software for personal,
+       educational, hobbyist, or home-lab purposes.
+
+   (b) Internal use. You are an organization using the Software solely for your
+       own Internal Business Operations.
+
+   Free Use is for your own benefit (or your organization's own benefit) only,
+   and does not include the activity described in Section 2.
+
+   Free Use applies to the specific version of the Software you obtained. The
+   Licensor may offer future versions of the Software under different terms,
+   including paid terms, and may discontinue Free Use for future versions.
+   Versions you already obtained under this License remain governed by it.
+
+2. ACTIVITY THAT REQUIRES A PAID COMMERCIAL LICENSE
+   You must obtain a separate paid commercial license from the Licensor before
+   you provide, host, operate, resell, rent, lease, or otherwise make the
+   Software, or any substantial part of its features or functionality, available
+   to any third party as a hosted, managed, or software-as-a-service offering,
+   or otherwise operate the Software for the benefit of third parties (including
+   as a managed service provider). This activity is not permitted under Free
+   Use.
+
+   To obtain a commercial license, contact the Licensor at the address in
+   Section 12.
+
+3. GENERAL RESTRICTIONS
+   Whether your use is Free Use or under a paid commercial license, you shall
+   not, and shall not permit any third party to:
+
+   3.1 reverse engineer, decompile, disassemble, de-minify, or otherwise attempt
+       to derive the source code, structure, or underlying ideas of the
+       Software, except to the limited extent this restriction is prohibited by
+       applicable law;
+
+   3.2 modify, adapt, translate, or create derivative works of the Software, or
+       circumvent or disable any license-key, authentication, telemetry, or
+       other technical or security mechanism in the Software;
+
+   3.3 remove, alter, or obscure any copyright, trademark, license, or other
+       proprietary notice in or on the Software or its documentation;
+
+   3.4 redistribute, publish, mirror, or transfer the Software or any copy to
+       any third party except as expressly permitted by a paid commercial
+       license;
+
+   3.5 use the Software, or any output or knowledge derived from it, to build,
+       train, or improve a product or service that competes with the Software;
+       or
+
+   3.6 use the Software in violation of any applicable law or regulation.
+
+   Deployment Artifacts. Notwithstanding Section 3.2, you may edit the
+   Deployment Artifacts (such as compose files, Kubernetes manifests,
+   environment files, and install scripts) solely as needed to configure the
+   Software for your own permitted deployment. Edited Deployment Artifacts
+   remain part of the Software and subject to this License, and you may not
+   distribute them.
+
+4. OWNERSHIP
+   The Software is licensed, not sold. The Licensor and its licensors retain all
+   right, title, and interest in and to the Software, including all intellectual
+   property rights. All rights not expressly granted are reserved.
+
+5. NO CONTRIBUTIONS; FEEDBACK
+   The Software is not developed as an open-source or community project and the
+   Licensor does not accept code contributions. Any patch, pull request, code,
+   or other material you nevertheless submit to the Licensor (a "Submission") is
+   made voluntarily, and you hereby assign to the Licensor all right, title, and
+   interest in the Submission, or, where assignment is not permitted by law,
+   grant the Licensor a perpetual, irrevocable, worldwide, royalty-free,
+   sublicensable license to use it for any purpose without obligation to you.
+   The Licensor has no obligation to review, accept, or use any Submission.
+   Bug reports, feature requests, and other suggestions ("Feedback") may be
+   used by the Licensor freely and without attribution or compensation.
+
+6. THIRD-PARTY AND OPEN-SOURCE COMPONENTS
+   The Software may include third-party or open-source components licensed under
+   their own terms. Those components are provided subject to their own licenses,
+   and nothing in this License limits your rights under, or grants rights that
+   supersede, those licenses.
+
+7. UPDATES
+   The Licensor may, but is not obligated to, provide updates, upgrades, or new
+   versions of the Software. Any such update is part of the "Software" and is
+   governed by this License unless accompanied by separate terms, in which case
+   those terms govern that update.
+
+8. TERM AND TERMINATION
+   8.1 This License is effective until terminated.
+   8.2 This License terminates automatically if you breach any of its terms. If
+       the Licensor gives you notice of a violation and you cure it within
+       thirty (30) days of receiving notice, your license is reinstated.
+   8.3 Upon termination you must cease all use of the Software and destroy all
+       copies in your possession or control. Sections 3 through 12 survive
+       termination.
+
+9. DISCLAIMER OF WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF ANY
+   KIND, WHETHER EXPRESS, IMPLIED, OR STATUTORY, INCLUDING WITHOUT LIMITATION
+   THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE,
+   TITLE, AND NON-INFRINGEMENT. THE LICENSOR DOES NOT WARRANT THAT THE SOFTWARE
+   WILL BE UNINTERRUPTED, ERROR-FREE, OR SECURE.
+
+10. LIMITATION OF LIABILITY
+    TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT WILL THE
+    LICENSOR BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR
+    EXEMPLARY DAMAGES, OR FOR ANY LOSS OF PROFITS, REVENUE, DATA, OR USE, ARISING
+    OUT OF OR RELATED TO THIS LICENSE OR THE SOFTWARE, WHETHER IN CONTRACT, TORT,
+    OR OTHERWISE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES. THE
+    LICENSOR'S TOTAL AGGREGATE LIABILITY ARISING OUT OF OR RELATED TO THIS
+    LICENSE WILL NOT EXCEED THE GREATER OF (A) THE AMOUNTS YOU PAID THE LICENSOR
+    FOR THE SOFTWARE IN THE TWELVE (12) MONTHS PRECEDING THE CLAIM, OR (B) ONE
+    HUNDRED U.S. DOLLARS (US$100).
+
+11. GOVERNING LAW
+    This License is governed by the laws of the State of Wyoming, United States,
+    without regard to its conflict-of-laws rules. The exclusive venue for any
+    dispute arising under this License is the state and federal courts located
+    in Sheridan County, Wyoming.
+
+12. DEFINITIONS AND CONTACT
+    "Internal Business Operations" means use of the Software for an
+    organization's own internal business purposes, by its own employees, agents,
+    and contractors acting on its behalf, and not for the benefit of any third
+    party.
+
+    "Deployment Artifacts" means the compose files, Kubernetes manifests,
+    environment-file templates, install scripts, and similar files the Licensor
+    distributes for the purpose of installing and configuring the Software.
+
+    Notices and commercial-license inquiries:
+
+        Root Chain Ventures, LLC
+        30 N Gould St, Ste #60062
+        Sheridan, WY 82801, USA
+        legal@rootchainventures.com
+        https://www.rootchainventures.com
+
+Copyright (c) 2026 Root Chain Ventures, LLC. All rights reserved.

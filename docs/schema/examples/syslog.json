@@ -1,0 +1,79 @@
+{
+  "@timestamp": "2026-10-12T14:03:07.412Z",
+  "ecs": { "version": "8.11.0" },
+  "data_stream": { "type": "logs", "dataset": "seshat.syslog", "namespace": "exo" },
+  "event": {
+    "kind": "event",
+    "category": ["authentication"],
+    "type": ["start"],
+    "action": "logon-failed",
+    "outcome": "failure",
+    "dataset": "seshat.syslog",
+    "module": "seshat",
+    "id": "01K7XEXAMPLE0SYSLOG000001",
+    "created": "2026-10-12T14:03:07.431Z",
+    "severity": 5,
+    "original": "<165>1 2026-10-12T14:03:07.412Z switch3.example.com sshd 2411 ID47 [exampleSDID@32473 iut=\"3\" eventSource=\"Application\" eventID=\"1011\"] Failed password for invalid user admin from 198.51.100.77 port 52311 ssh2"
+  },
+  "message": "Failed password for invalid user admin from 198.51.100.77 port 52311 ssh2",
+  "log": {
+    "level": "notice",
+    "syslog": {
+      "facility": { "code": 20, "name": "local4" },
+      "severity": { "code": 5, "name": "notice" },
+      "priority": 165
+    }
+  },
+  "process": { "name": "sshd", "pid": 2411 },
+  "user": { "name": "admin" },
+  "observer": {
+    "vendor": "Example Org",
+    "product": "Seshat",
+    "version": "0.1.0",
+    "name": "collector-1.example.com",
+    "type": "gateway"
+  },
+  "host": { "name": "switch3.example.com", "ip": ["192.0.2.11"] },
+  "source": { "ip": "198.51.100.77", "port": 52311 },
+  "network": { "transport": "tcp", "iana_number": "6", "type": "ipv4", "community_id": "1:2sivag9UVmXMNZAd7wQZKsfpXv8=" },
+  "related": { "ip": ["192.0.2.11", "198.51.100.77"], "hosts": ["switch3.example.com"], "user": ["admin"] },
+  "seshat": {
+    "schema_version": "1.0",
+    "source": {
+      "listener": "syslog-udp-default",
+      "input": "syslog",
+      "protocol": "udp",
+      "ip": "192.0.2.11",
+      "port": 40514,
+      "site": "example-site-a"
+    },
+    "device": {
+      "status": "known",
+      "id": "dev-0003",
+      "name": "switch3.example.com",
+      "vendor": "Example Vendor",
+      "model": "EX-3000-48P",
+      "site": "example-site-a",
+      "role": "access-switch"
+    },
+    "enrichment": { "level": "full", "sources": ["inventory"] },
+    "syslog": {
+      "format": "rfc5424",
+      "priority": 165,
+      "facility": { "code": 20, "name": "local4" },
+      "severity": { "code": 5, "name": "notice" },
+      "version": 1,
+      "hostname": "switch3.example.com",
+      "appname": "sshd",
+      "procid": "2411",
+      "msgid": "ID47",
+      "sd": {
+        "exampleSDID@32473.iut": "3",
+        "exampleSDID@32473.eventSource": "Application",
+        "exampleSDID@32473.eventID": "1011"
+      },
+      "parser": "builtin/rfc5424",
+      "template_id": "t-9f2c41ab"
+    }
+  }
+}

@@ -1,0 +1,32 @@
+# Overlay: store Seshat's data in PostgreSQL instead of SQLite.
+#   docker compose -f compose.yaml -f compose.postgres.yaml up -d
+# Requires SESHAT_POSTGRES_PASSWORD in .env (use letters and digits only, it goes into a URL).
+name: seshat
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: seshat
+      POSTGRES_DB: seshat
+      POSTGRES_PASSWORD: ${SESHAT_POSTGRES_PASSWORD:?set SESHAT_POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - seshat-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seshat -d seshat"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  seshat:
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SESHAT_DATABASE_URL: ${SESHAT_DATABASE_URL:-postgres://seshat:${SESHAT_POSTGRES_PASSWORD:?}@postgres:5432/seshat?sslmode=disable}
+
+volumes:
+  seshat-pgdata:

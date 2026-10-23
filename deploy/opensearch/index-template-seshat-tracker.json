@@ -1,0 +1,177 @@
+{
+  "index_patterns": [
+    "logs-seshat.tracker-*"
+  ],
+  "data_stream": {},
+  "priority": 200,
+  "version": 1,
+  "composed_of": [
+    "seshat-core"
+  ],
+  "_meta": {
+    "managed_by": "seshat",
+    "seshat_schema_version": "1.0",
+    "ecs_version": "8.11.0",
+    "description": "Seshat seshat.tracker data streams: Device Tracker sightings and interval events."
+  },
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": 1,
+        "number_of_replicas": 1
+      }
+    },
+    "mappings": {
+      "properties": {
+        "seshat": {
+          "dynamic": false,
+          "properties": {
+            "tracker": {
+              "properties": {
+                "fact": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "source": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "observed_at": {
+                  "type": "date"
+                },
+                "first_seen": {
+                  "type": "date"
+                },
+                "last_seen": {
+                  "type": "date"
+                },
+                "interval_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "confidence": {
+                  "type": "double"
+                },
+                "mac": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "ip": {
+                  "type": "ip"
+                },
+                "vrf": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "hostname": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "user": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "oui_vendor": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "device_type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "randomized_mac": {
+                  "type": "boolean"
+                },
+                "lease_expires": {
+                  "type": "date"
+                },
+                "gateway": {
+                  "type": "ip"
+                },
+                "watch": {
+                  "properties": {
+                    "id": {
+                      "type": "long"
+                    },
+                    "kind": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "value": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "label": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "reason": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "location": {
+                  "properties": {
+                    "site": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "device": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "port": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "ifindex": {
+                      "type": "long"
+                    },
+                    "vlan": {
+                      "type": "long"
+                    },
+                    "ap": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "ssid": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "band": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "rssi": {
+                      "type": "long"
+                    },
+                    "channel": {
+                      "type": "long"
+                    },
+                    "circuit_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "remote_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "circuit_kind": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "trace": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

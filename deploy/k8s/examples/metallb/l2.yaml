@@ -1,0 +1,24 @@
+# MetalLB in layer 2 mode: ONE node answers ARP/NDP for the address at a time. Source addresses are
+# preserved with externalTrafficPolicy: Local, but the whole intake lands on a single node (no load
+# spreading); on a failure another node with a ready pod takes over after a few seconds. Choose BGP
+# (bgp.yaml) when you need more than one receiving node.
+#   kubectl apply -f deploy/k8s/examples/metallb/l2.yaml
+#   helm install ... --set intake.service.annotations."metallb\.io/address-pool"=telemetry
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: telemetry
+  namespace: metallb-system
+spec:
+  addresses:
+    - 192.0.2.10/32
+  autoAssign: false
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: telemetry
+  namespace: metallb-system
+spec:
+  ipAddressPools: [telemetry]
+  # interfaces: [eth0]       # optionally restrict to the interface on the telemetry VLAN

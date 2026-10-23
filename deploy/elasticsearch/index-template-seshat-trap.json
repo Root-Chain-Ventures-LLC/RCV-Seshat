@@ -1,0 +1,129 @@
+{
+  "index_patterns": [
+    "logs-seshat.trap-*"
+  ],
+  "data_stream": {},
+  "priority": 200,
+  "version": 1,
+  "composed_of": [
+    "seshat-core"
+  ],
+  "_meta": {
+    "managed_by": "seshat",
+    "seshat_schema_version": "1.0",
+    "ecs_version": "8.11.0",
+    "description": "Seshat seshat.trap data streams: SNMP traps and informs."
+  },
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": 1,
+        "number_of_replicas": 1
+      }
+    },
+    "mappings": {
+      "properties": {
+        "seshat": {
+          "dynamic": false,
+          "properties": {
+            "trap": {
+              "properties": {
+                "oid": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "mib": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "enterprise": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "description": {
+                  "type": "text"
+                },
+                "version": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "pdu_type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "translated": {
+                  "type": "boolean"
+                },
+                "agent_address": {
+                  "type": "ip"
+                },
+                "uptime_ticks": {
+                  "type": "long"
+                },
+                "generic_type": {
+                  "type": "long"
+                },
+                "specific_type": {
+                  "type": "long"
+                },
+                "engine_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "context_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "security_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "varbinds": {
+                  "type": "nested",
+                  "properties": {
+                    "oid": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "type": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "value": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "raw": {
+                      "type": "keyword",
+                      "index": false,
+                      "doc_values": false
+                    }
+                  }
+                },
+                "vars": {
+                  "type": "flattened"
+                }
+              }
+            }
+          }
+        },
+        "data_stream": {
+          "properties": {
+            "dataset": {
+              "type": "constant_keyword",
+              "value": "seshat.trap"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+# MetalLB in BGP mode: the telemetry address is announced by every node that runs a ready Seshat pod
+# (the Service has externalTrafficPolicy: Local), and the router spreads senders over them with ECMP.
+# Synthetic addresses and AS numbers; replace them with yours. Apply after MetalLB is installed:
+#   kubectl apply -f deploy/k8s/examples/metallb/bgp.yaml
+# then install the chart with
+#   --set intake.service.annotations."metallb\.io/address-pool"=telemetry
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: telemetry
+  namespace: metallb-system
+spec:
+  addresses:
+    - 192.0.2.10/32
+  autoAssign: false          # only Services that ask for this pool by name get an address from it
+---
+apiVersion: metallb.io/v1beta2
+kind: BGPPeer
+metadata:
+  name: site-router
+  namespace: metallb-system
+spec:
+  myASN: 64512
+  peerASN: 64513
+  peerAddress: 198.51.100.1
+  # Faster failure detection than the BGP hold timer (needs BFD on the router):
+  # bfdProfile: fast
+---
+apiVersion: metallb.io/v1beta1
+kind: BGPAdvertisement
+metadata:
+  name: telemetry
+  namespace: metallb-system
+spec:
+  ipAddressPools: [telemetry]
+  aggregationLength: 32
+  # No extra setting is needed for Local policy: for a Service with externalTrafficPolicy: Local MetalLB
+  # announces the address only from nodes that have a ready endpoint, so a node without a Seshat pod
+  # withdraws the route instead of forwarding to another node (which would rewrite the source).
+  peers: [site-router]

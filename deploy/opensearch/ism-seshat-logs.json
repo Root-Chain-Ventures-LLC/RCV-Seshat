@@ -1,0 +1,36 @@
+{
+  "policy": {
+    "description": "Example lifecycle for Seshat data streams: roll over daily or at 50 GB, force-merge after 7 days, delete after 90 days. Adjust retention to your own policy; flow and flow_rollup usually want different values.",
+    "default_state": "hot",
+    "states": [
+      {
+        "name": "hot",
+        "actions": [
+          { "rollover": { "min_index_age": "1d", "min_primary_shard_size": "50gb" } }
+        ],
+        "transitions": [
+          { "state_name": "warm", "conditions": { "min_index_age": "7d" } }
+        ]
+      },
+      {
+        "name": "warm",
+        "actions": [
+          { "force_merge": { "max_num_segments": 1 } }
+        ],
+        "transitions": [
+          { "state_name": "delete", "conditions": { "min_index_age": "90d" } }
+        ]
+      },
+      {
+        "name": "delete",
+        "actions": [
+          { "delete": {} }
+        ],
+        "transitions": []
+      }
+    ],
+    "ism_template": [
+      { "index_patterns": ["logs-seshat.*"], "priority": 100 }
+    ]
+  }
+}

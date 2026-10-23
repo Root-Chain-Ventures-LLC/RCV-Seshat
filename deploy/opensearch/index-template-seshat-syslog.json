@@ -1,0 +1,250 @@
+{
+  "index_patterns": [
+    "logs-seshat.syslog-*"
+  ],
+  "data_stream": {},
+  "priority": 200,
+  "version": 1,
+  "composed_of": [
+    "seshat-core"
+  ],
+  "_meta": {
+    "managed_by": "seshat",
+    "seshat_schema_version": "1.0",
+    "ecs_version": "8.11.0",
+    "description": "Seshat seshat.syslog data streams: syslog messages (RFC 3164, RFC 5424, CEF, LEEF)."
+  },
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": 1,
+        "number_of_replicas": 1
+      }
+    },
+    "mappings": {
+      "properties": {
+        "log": {
+          "properties": {
+            "level": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "syslog": {
+              "properties": {
+                "facility": {
+                  "properties": {
+                    "code": {
+                      "type": "long"
+                    },
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "severity": {
+                  "properties": {
+                    "code": {
+                      "type": "long"
+                    },
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "priority": {
+                  "type": "long"
+                }
+              }
+            }
+          }
+        },
+        "process": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "pid": {
+              "type": "long"
+            }
+          }
+        },
+        "user": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "source": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "long"
+            },
+            "mac": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "domain": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "nat": {
+              "properties": {
+                "ip": {
+                  "type": "ip"
+                },
+                "port": {
+                  "type": "long"
+                }
+              }
+            }
+          }
+        },
+        "destination": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "long"
+            },
+            "mac": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "domain": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "nat": {
+              "properties": {
+                "ip": {
+                  "type": "ip"
+                },
+                "port": {
+                  "type": "long"
+                }
+              }
+            }
+          }
+        },
+        "network": {
+          "properties": {
+            "transport": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "iana_number": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "protocol": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "application": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "direction": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "bytes": {
+              "type": "long"
+            },
+            "packets": {
+              "type": "long"
+            },
+            "community_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "seshat": {
+          "dynamic": false,
+          "properties": {
+            "syslog": {
+              "properties": {
+                "format": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "priority": {
+                  "type": "long"
+                },
+                "facility": {
+                  "properties": {
+                    "code": {
+                      "type": "long"
+                    },
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "severity": {
+                  "properties": {
+                    "code": {
+                      "type": "long"
+                    },
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "version": {
+                  "type": "long"
+                },
+                "hostname": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "appname": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "procid": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "msgid": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "sd": {
+                  "type": "flat_object"
+                },
+                "extension": {
+                  "type": "flat_object"
+                },
+                "parser": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "template_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

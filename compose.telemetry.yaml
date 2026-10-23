@@ -1,0 +1,12 @@
+# Overlay: publish the streaming telemetry dial-out listener (Cisco MDT, Juniper, gNMI dial-out) on 57400/tcp.
+#   docker compose -f compose.yaml -f compose.telemetry.yaml up -d
+# The listener is PLAINTEXT and unauthenticated unless you configure TLS (and, better, a client CA so only
+# your devices can connect): set SESHAT_TELEMETRY_TLS_CERT / SESHAT_TELEMETRY_TLS_KEY / SESHAT_TELEMETRY_TLS_CLIENT_CA
+# in .env and mount the files (docs/inputs/telemetry.md). Restrict the port to your device networks with the
+# host firewall either way (docs/hardening.md "Listener exposure").
+name: seshat
+
+services:
+  seshat:
+    ports:
+      - "57400:57400/tcp"

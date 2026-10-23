@@ -1,0 +1,55 @@
+# Overlay: the Device Tracker portal (lookup page only) on :8081.
+#   docker compose -f compose.yaml -f compose.portal.yaml up -d
+# The portal keeps its data in its own volume (portal-data), which is what push mode, api mode and db mode want.
+# Mode shared reads the tracker views of Seshat's own database: with SQLite mount Seshat's volume
+# (SESHAT_PORTAL_VOLUME=seshat-data); with PostgreSQL put the same URL in .env as SESHAT_DATABASE_URL:
+#   docker compose -f compose.yaml -f compose.postgres.yaml -f compose.portal.yaml up -d
+#
+# Data mode (docs/device-tracker-portal.md). Put the settings in .env:
+#   push   (default): Seshat pushes to this portal. Create a "sync" token in the portal, add the portal under
+#                     Seshat Settings > Portal sync. No other settings.
+#   api    : SESHAT_PORTAL_MODE=api SESHAT_PORTAL_API_URL=https://seshat.example.com SESHAT_PORTAL_API_TOKEN=tkr_...
+#   db     : SESHAT_PORTAL_MODE=db SESHAT_PORTAL_DB_URL=postgres://tracker_portal:...@db/seshat   (deploy/postgres/tracker_public_role.sql)
+#   shared : SESHAT_PORTAL_MODE=shared with the same SESHAT_DATABASE_URL as Seshat (compose.postgres.yaml),
+#            or SESHAT_PORTAL_VOLUME=seshat-data for one SQLite volume. (Push mode refuses to start on Seshat's database.)
+# First start: SESHAT_PORTAL_ADMIN_EMAIL / SESHAT_PORTAL_ADMIN_PASSWORD create the break-glass administrator.
+# Single sign-on: SESHAT_OIDC_* and SESHAT_PUBLIC_URL (or Settings > Sign-in in the UI).
+# The portal needs its own SESHAT_SECRET_KEY unless it runs in mode shared (then the SAME key as Seshat).
+name: seshat
+
+# Applied to every service below (YAML anchors do not cross files, so each compose file repeats it).
+x-hardened: &hardened
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 512
+
+services:
+  device-tracker:
+    <<: *hardened
+    image: ${SESHAT_PORTAL_IMAGE:-ghcr.io/root-chain-ventures-llc/seshat-device-tracker:0.2.0}
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      SESHAT_DEV: ${SESHAT_DEV:-0}
+      SESHAT_DATABASE_URL: ${SESHAT_DATABASE_URL:-}
+      SESHAT_PORTAL_MODE: ${SESHAT_PORTAL_MODE:-push}
+      # Pinned: a shared .env usually carries SESHAT_LISTEN for the main service (:8080), which
+      # would otherwise override the portal's default and leave the published 8081 unreachable.
+      SESHAT_LISTEN: ":8081"
+    ports:
+      # Plain HTTP: loopback by default; the portal is meant to sit behind a TLS proxy (docs/hardening.md).
+      # Set SESHAT_PORTAL_BIND in .env to publish it on a specific address.
+      - "${SESHAT_PORTAL_BIND:-127.0.0.1}:8081:8081"
+    volumes:
+      - ${SESHAT_PORTAL_VOLUME:-portal-data}:/data
+
+volumes:
+  seshat-data:
+  portal-data:

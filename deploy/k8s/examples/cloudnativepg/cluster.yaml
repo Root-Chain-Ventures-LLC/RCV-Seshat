@@ -1,0 +1,35 @@
+# A three-instance PostgreSQL 17 cluster for Seshat with CloudNativePG (an operator you install
+# separately; https://cloudnative-pg.io). The Seshat chart does NOT manage this object: it only reads
+# the connection Secret the operator creates, named <cluster>-app with the key "uri".
+#   kubectl apply -n seshat -f deploy/k8s/examples/cloudnativepg/cluster.yaml
+#   helm install seshat deploy/helm/seshat --set secrets.existingSecret=seshat --set database.mode=cnpg \
+#        --set database.cnpg.clusterName=seshat-db
+# Seshat uses LISTEN/NOTIFY on a dedicated direct connection: point it at the -rw Service (the Secret's
+# URI does), not through a transaction pooler.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: seshat-db
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:17
+  primaryUpdateStrategy: unsupervised
+  enableSuperuserAccess: false
+  bootstrap:
+    initdb:
+      database: seshat
+      owner: seshat
+  storage:
+    size: 20Gi
+    # storageClass: fast-ssd
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: 512MB
+  resources:
+    requests: {cpu: 500m, memory: 1Gi}
+    limits: {memory: 2Gi}
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+  # Back up with the operator's Barman object-store integration or volume snapshots (not shown).

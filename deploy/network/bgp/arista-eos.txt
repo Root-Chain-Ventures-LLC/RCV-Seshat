@@ -1,0 +1,51 @@
+! Arista EOS: Seshat anycast, three nodes, IPv4 and IPv6, one AS for all nodes.
+! Documentation-range addresses and private ASNs; replace them.
+!
+! ECMP hashing on EOS defaults to the L3/L4 tuple (source and destination address, ports). Keep
+! source and destination address in the hash; where your platform supports resilient ECMP
+! ("ip hardware fib ecmp resilience ..."), enable it so a node change moves only that node's senders.
+!
+ip prefix-list SESHAT-IN4 seq 10 permit 198.51.100.10/32
+ipv6 prefix-list SESHAT-IN6 seq 10 permit 2001:db8:100::10/128
+!
+route-map SESHAT-IN4 permit 10
+   match ip address prefix-list SESHAT-IN4
+route-map SESHAT-IN6 permit 10
+   match ipv6 address prefix-list SESHAT-IN6
+route-map DENY-ALL deny 10
+!
+router bgp 65000
+   router-id 192.0.2.1
+   maximum-paths 8
+   no bgp default ipv4-unicast
+   neighbor SESHAT4 peer group
+   neighbor SESHAT4 remote-as 65010
+   neighbor SESHAT4 description Seshat nodes IPv4
+   neighbor SESHAT4 timers 3 9
+   ! neighbor SESHAT4 password CHANGE-ME
+   ! Optional BFD (needs a responder on the node host):
+   ! neighbor SESHAT4 bfd
+   neighbor 192.0.2.11 peer group SESHAT4
+   neighbor 192.0.2.12 peer group SESHAT4
+   neighbor 192.0.2.13 peer group SESHAT4
+   neighbor SESHAT6 peer group
+   neighbor SESHAT6 remote-as 65010
+   neighbor SESHAT6 description Seshat nodes IPv6
+   neighbor SESHAT6 timers 3 9
+   ! neighbor SESHAT6 password CHANGE-ME
+   neighbor 2001:db8:ffff::11 peer group SESHAT6
+   neighbor 2001:db8:ffff::12 peer group SESHAT6
+   neighbor 2001:db8:ffff::13 peer group SESHAT6
+   !
+   address-family ipv4
+      neighbor SESHAT4 activate
+      neighbor SESHAT4 route-map SESHAT-IN4 in
+      neighbor SESHAT4 route-map DENY-ALL out
+   !
+   address-family ipv6
+      neighbor SESHAT6 activate
+      neighbor SESHAT6 route-map SESHAT-IN6 in
+      neighbor SESHAT6 route-map DENY-ALL out
+!
+! Check:  show ip route 198.51.100.10/32     (several "via" lines)
+!         show ip bgp summary

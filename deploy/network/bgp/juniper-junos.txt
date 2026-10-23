@@ -1,0 +1,54 @@
+# Juniper Junos: Seshat anycast, three nodes, IPv4 and IPv6, one AS for all nodes.
+# Documentation-range addresses and private ASNs; replace them. "set" form.
+#
+# Junos installs only one BGP next hop in the forwarding table unless a policy asks for
+# load balancing ("per-packet" is the historic name; it hashes per flow).
+# Hash keys are platform dependent: make sure source and destination address are in the hash
+# (see "forwarding-options hash-key" / "enhanced-hash-key" for your platform) and, ideally, enable
+# resilient hashing where available so a node change moves only that node's senders.
+
+set routing-options router-id 192.0.2.1
+set routing-options autonomous-system 65000
+set routing-options forwarding-table export LOAD-BALANCE
+set policy-options policy-statement LOAD-BALANCE then load-balance per-packet
+
+set policy-options policy-statement SESHAT-IN term anycast from family inet
+set policy-options policy-statement SESHAT-IN term anycast from route-filter 198.51.100.10/32 exact
+set policy-options policy-statement SESHAT-IN term anycast then accept
+set policy-options policy-statement SESHAT-IN term anycast6 from family inet6
+set policy-options policy-statement SESHAT-IN term anycast6 from route-filter 2001:db8:100::10/128 exact
+set policy-options policy-statement SESHAT-IN term anycast6 then accept
+set policy-options policy-statement SESHAT-IN then reject
+set policy-options policy-statement REJECT-ALL then reject
+
+set protocols bgp group SESHAT4 type external
+set protocols bgp group SESHAT4 peer-as 65010
+set protocols bgp group SESHAT4 description "Seshat nodes IPv4"
+set protocols bgp group SESHAT4 family inet unicast
+set protocols bgp group SESHAT4 hold-time 9
+set protocols bgp group SESHAT4 multipath
+set protocols bgp group SESHAT4 import SESHAT-IN
+set protocols bgp group SESHAT4 export REJECT-ALL
+# set protocols bgp group SESHAT4 authentication-key "CHANGE-ME"
+# Optional BFD (needs a responder on the node host):
+# set protocols bgp group SESHAT4 bfd-liveness-detection minimum-interval 300
+# set protocols bgp group SESHAT4 bfd-liveness-detection multiplier 3
+set protocols bgp group SESHAT4 neighbor 192.0.2.11
+set protocols bgp group SESHAT4 neighbor 192.0.2.12
+set protocols bgp group SESHAT4 neighbor 192.0.2.13
+
+set protocols bgp group SESHAT6 type external
+set protocols bgp group SESHAT6 peer-as 65010
+set protocols bgp group SESHAT6 description "Seshat nodes IPv6"
+set protocols bgp group SESHAT6 family inet6 unicast
+set protocols bgp group SESHAT6 hold-time 9
+set protocols bgp group SESHAT6 multipath
+set protocols bgp group SESHAT6 import SESHAT-IN
+set protocols bgp group SESHAT6 export REJECT-ALL
+# set protocols bgp group SESHAT6 authentication-key "CHANGE-ME"
+set protocols bgp group SESHAT6 neighbor 2001:db8:ffff::11
+set protocols bgp group SESHAT6 neighbor 2001:db8:ffff::12
+set protocols bgp group SESHAT6 neighbor 2001:db8:ffff::13
+
+# Check:  show route 198.51.100.10/32 extensive     (several "Next hop" lines, "Protocol next hop")
+#         show bgp summary

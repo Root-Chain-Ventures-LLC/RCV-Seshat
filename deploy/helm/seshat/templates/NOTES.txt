@@ -1,0 +1,75 @@
+Seshat {{ .Chart.AppVersion }} installed as {{ include "seshat.fullname" . }} in {{ .Release.Namespace }}.
+
+UI and API:
+{{- if .Values.ui.ingress.enabled }}
+{{- range .Values.ui.ingress.hosts }}
+  https://{{ .host }}/
+{{- end }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "seshat.fullname" . }}-ui 8080:{{ .Values.ui.service.port }}   # then open http://127.0.0.1:8080
+{{- end }}
+  First run: create the first administrator in the browser (POST /api/setup; 409 once any user exists). It needs the setup token:
+  set SESHAT_SETUP_TOKEN (>= 32 characters, from a Secret via extraEnvFrom) before the first install; a pod that generates its own
+  would not match the other replicas. docs/security.md.
+
+{{ if .Values.intake.hostNetwork.enabled -}}
+TELEMETRY INTAKE: host network
+  The pods listen on the nodes' own addresses ({{ if .Values.intake.hostNetwork.standardPorts }}162, 514, 2055, 4739, 6343{{ else }}1162 traps, 1514 syslog, 2055, 4739, 6343{{ end }}); there is no Service in the path, so source addresses are not rewritten.
+  Point devices at a node address (or a floating address you manage). Which nodes run a pod:
+    kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=collector -o wide
+{{- if not .Values.intake.hostNetwork.standardPorts }}
+  Ports 162 and 514 are privileged and the container runs as non-root, so redirect them on each node, for example
+  with nftables: udp dport 162 redirect to 1162; udp dport 514 redirect to 1514; tcp dport 514 redirect to 1514
+  (a redirect on the same host keeps the source address).
+{{- end }}
+{{- else if .Values.intake.service.enabled -}}
+TELEMETRY INTAKE: {{ .Values.intake.service.type }} Service {{ include "seshat.fullname" . }}-intake{{ if .Values.intake.service.split }}-udp / -tcp{{ end }}
+  Find the address devices should send to:
+    kubectl -n {{ .Release.Namespace }} get svc -l app.kubernetes.io/component=intake
+  Ports: 162/udp traps, 514/udp+tcp syslog, 2055/udp NetFlow, 4739/udp IPFIX, 6343/udp sFlow, 57400/tcp streaming-telemetry dial-out.
+
+{{- if and (eq .Values.intake.service.type "LoadBalancer") (not .Values.intake.service.loadBalancerSourceRanges) }}
+  NOTE: intake.service.loadBalancerSourceRanges is empty, so the load balancer accepts telemetry from anywhere it
+  is reachable. Set it to your device networks, or restrict the Service with a NetworkPolicy
+  (deploy/k8s/examples/networkpolicy.yaml). Traps, syslog, flows and the 57400 dial-out port carry no authentication.
+{{- end }}
+
+  SOURCE ADDRESSES
+{{- if eq .Values.intake.service.externalTrafficPolicy "Local" }}
+  externalTrafficPolicy is Local: traffic goes only to pods on the node that received it, so the sender's source
+  address reaches Seshat unchanged. Two consequences:
+    * the load balancer must health-check the nodes (kube-proxy answers on healthCheckNodePort) so that only nodes
+      that run a ready pod receive traffic; MetalLB and cloud balancers do this when the Service has Local policy;
+    * spread the collector pods over the nodes that receive traffic. A node without a ready pod gets nothing.
+{{- else }}
+  WARNING: externalTrafficPolicy is {{ .Values.intake.service.externalTrafficPolicy }}. kube-proxy then rewrites the source address
+  (SNAT) to a node address whenever a packet is forwarded to a pod on another node. Every device would look like
+  the same few node addresses: enrichment, the device knowledge base and per-sender limits break. Set
+  intake.service.externalTrafficPolicy=Local, or use hostNetwork, or a balancer that does not SNAT (IPVS DSR).
+{{- end }}
+{{- if .Values.intake.sourceIPCheck.enabled }}
+  Check: the pods report /api/ready "source_ip" and the Dashboard "Source addresses" tile; "snat_detected" means senders
+  arrived from {{ join ", " (concat (list "the node address") .Values.intake.sourceIPCheck.snatCIDRs) }}.
+{{- end }}
+{{- end }}
+{{ if gt (int .Values.replicaCount) 1 }}
+Replicas: {{ .Values.replicaCount }}.{{ if eq .Values.database.mode "none" }} Each replica has its own SQLite database (database.allowReplicatedSqlite).{{ else }} Configuration, users and the device knowledge base are shared through PostgreSQL.{{ end }}
+{{- end }}
+{{- if .Values.portal.enabled }}
+
+Device Tracker portal ({{ .Values.portal.mode }} mode):
+{{- if .Values.portal.ingress.enabled }}
+{{- range .Values.portal.ingress.hosts }}
+  https://{{ .host }}/
+{{- end }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "seshat.fullname" . }}-device-tracker 8081:80
+{{- end }}
+{{- end }}
+{{- if ne .Values.database.mode "none" }}
+
+Migrations: the pre-install / pre-upgrade hook Job {{ include "seshat.fullname" . }}-migrate ran `seshat store migrate` once before the pods started.
+{{- end }}
+
+Upgrade:  helm upgrade {{ .Release.Name }} <chart> -f values.yaml     (rolling, one pod at a time; each pod drains before it stops)
+Rollback: helm rollback {{ .Release.Name }} <revision>                 (database migrations are not reversed; see docs/kubernetes.md)

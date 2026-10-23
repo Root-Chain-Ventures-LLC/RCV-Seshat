@@ -1,0 +1,107 @@
+# Seshat high availability, mode 3 (docs/ha.md, "Mode 3: BGP anycast"): two nodes announce the same
+# service address to a router with BGP; the router spreads senders over the healthy nodes (ECMP).
+#
+# This file is an EXAMPLE for ONE HOST that runs both nodes so you can try it against a router or an
+# FRR container (deploy/network/bgp/frr.conf). In production run one
+# service per machine (copy a single service block to each host and change SESHAT_NODE_NAME and the
+# ports). Run it:
+#
+#   cp .env.example .env          # then set SESHAT_SECRET_KEY (same on both nodes) and SESHAT_CLUSTER_SECRET
+#   docker compose -f deploy/compose/ha-anycast.example.yaml up -d
+#
+# Then open http://<host>:8080 (node-a), create the administrator, go to Cluster > BGP anycast >
+# Configure: local AS 65010, one router ID per node, a neighbour (your router, AS 65000) and the
+# service address as a /32 (for example 198.51.100.10/32). The nodes add the address to the loopback
+# and announce it once they have been healthy for 15 s; the router then lists one path per node.
+#
+# What the settings mean
+# - network_mode: host   the BGP session leaves from the host's own address and the service address is
+#                        added to the host's loopback, where the wildcard listeners answer on it. Two
+#                        nodes on one host therefore need their own listen ports and, because both would
+#                        open a BGP session from the same address, only ONE of them can be the router's
+#                        neighbour. On separate machines (the real deployment) each node peers with the
+#                        router from its own address and the defaults apply.
+# - user: "0:0" + caps   the image's default user is non-root and holds no capabilities, so this service runs as
+#                        root with cap_drop ALL and only what it needs: NET_ADMIN adds/removes the loopback address
+#                        and sets the TCP-MD5 key (NET_RAW is NOT needed, that is VRRP); NET_BIND_SERVICE lets the
+#                        speaker listen on tcp/179 for router-initiated sessions; DAC_OVERRIDE because root without
+#                        it cannot open the image's /data (0700, owned by uid 65532; chown the volume to root to
+#                        drop it). Without NET_ADMIN the Cluster page says so and an address that is not already
+#                        on the host is simply not announced. read_only + tmpfs /tmp + no-new-privileges apply as in
+#                        compose.yaml. Not boot-tested on every platform: try the failover on a spare host first.
+# - SESHAT_SECRET_KEY    identical on every node: neighbour passwords are sealed with it in the shared
+#                        configuration, as are SNMPv3 keys.
+# - SESHAT_CLUSTER_*     the peer link (SQLite mode) replicates the BGP configuration between the nodes.
+# - stop_grace_period    on stop a node withdraws its prefixes first, keeps serving for SESHAT_DRAIN_GRACE
+#                        (3 s), then waits up to SESHAT_DRAIN_TIMEOUT (20 s) for its queues to empty.
+name: seshat-anycast
+
+x-seshat: &seshat
+  image: ghcr.io/root-chain-ventures-llc/seshat:0.2.0
+  restart: unless-stopped
+  network_mode: host
+  user: "0:0"
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  cap_add: [NET_ADMIN, NET_BIND_SERVICE, DAC_OVERRIDE]
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 512
+  stop_grace_period: 40s
+  env_file:
+    - path: ../../.env
+      required: false
+  environment: &env
+    SESHAT_DEV: "0"
+    SESHAT_SECRET_KEY: ${SESHAT_SECRET_KEY:?set SESHAT_SECRET_KEY to the same 32+ character value on every node}
+    SESHAT_CLUSTER_SECRET: ${SESHAT_CLUSTER_SECRET:?set SESHAT_CLUSTER_SECRET to the same 16+ character value on every node}
+    SESHAT_CLUSTER_SYNC_INTERVAL: 5s
+
+services:
+  node-a:
+    <<: *seshat
+    container_name: seshat-anycast-a
+    environment:
+      <<: *env
+      SESHAT_NODE_NAME: node-a
+      SESHAT_LISTEN: ":8080"
+      SESHAT_SNMP_TRAP_LISTEN: ":1162"
+      SESHAT_SYSLOG_UDP_LISTEN: ":1514"
+      SESHAT_SYSLOG_TCP_LISTEN: ":1514"
+      SESHAT_FLOW_NETFLOW_LISTEN: ":2055"
+      SESHAT_FLOW_IPFIX_LISTEN: ":4739"
+      SESHAT_FLOW_SFLOW_LISTEN: ":6343"
+      SESHAT_TELEMETRY_GNMI_DIALOUT_LISTEN: ":57400"
+      SESHAT_CLUSTER_PEERS: ${NODE_B_URL:-http://127.0.0.1:8180}
+      SESHAT_CLUSTER_ADVERTISE: http://127.0.0.1:8080
+      # SESHAT_BGP_DISABLE=1 would keep this node out of BGP whatever the cluster configuration says.
+    volumes:
+      - node-a-data:/data
+
+  node-b:
+    <<: *seshat
+    container_name: seshat-anycast-b
+    environment:
+      <<: *env
+      SESHAT_NODE_NAME: node-b
+      # Shifted ports because this example shares one host with node-a. On a separate machine delete
+      # these six lines and use the defaults.
+      SESHAT_LISTEN: ":8180"
+      SESHAT_SNMP_TRAP_LISTEN: ":1262"
+      SESHAT_SYSLOG_UDP_LISTEN: ":1614"
+      SESHAT_SYSLOG_TCP_LISTEN: ":1614"
+      SESHAT_FLOW_NETFLOW_LISTEN: ":2155"
+      SESHAT_FLOW_IPFIX_LISTEN: ":4839"
+      SESHAT_FLOW_SFLOW_LISTEN: ":6443"
+      SESHAT_TELEMETRY_GNMI_DIALOUT_LISTEN: ":57500"
+      SESHAT_CLUSTER_PEERS: ${NODE_A_URL:-http://127.0.0.1:8080}
+      SESHAT_CLUSTER_ADVERTISE: http://127.0.0.1:8180
+    volumes:
+      - node-b-data:/data
+
+volumes:
+  node-a-data:
+  node-b-data:
