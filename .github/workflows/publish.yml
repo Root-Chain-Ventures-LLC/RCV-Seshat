@@ -147,7 +147,7 @@ jobs:
           copy_image() {
             local staging="$1" public="$2" digest="$3" hex tags t got
             hex="${digest#sha256:}"
-            oras cp --registry-config "$cfg" "$staging@$digest" "$public:$VERSION"
+            oras cp --from-registry-config "$cfg" --to-registry-config "$cfg" "$staging@$digest" "$public:$VERSION"
             got=$(oras manifest fetch --registry-config "$cfg" --descriptor "$public:$VERSION" | jq -r .digest)
             [ "$got" = "$digest" ] || { echo "::error::$public:$VERSION is $got after the copy, expected $digest"; exit 1; }
             tags=$(oras repo tags --registry-config "$cfg" "$staging" | { grep -E "^sha256-${hex}(\.[a-z0-9]+)?\$" || true; })
@@ -155,7 +155,7 @@ jobs:
               echo "::warning::$staging@$digest has no signature objects; the signature check below will fail unless the release is signed another way"
             fi
             for t in $tags; do
-              oras cp --registry-config "$cfg" "$staging:$t" "$public:$t"
+              oras cp --from-registry-config "$cfg" --to-registry-config "$cfg" "$staging:$t" "$public:$t"
               echo "copied $t"
             done
             if [ "$PRERELEASE" = "false" ]; then
