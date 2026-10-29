@@ -16,9 +16,10 @@ name: publish
 #
 # Re-running a version that is already published verifies its assets and the images again and changes nothing.
 #
-# No repository secrets. GITHUB_TOKEN does everything: it reads the private staging packages (the staging
-# packages grant this repository Actions read access), writes the public packages, and reads, publishes and
-# prunes this repository's releases (permissions below). The private repository never gives this repository a
+# GITHUB_TOKEN writes the public packages and reads, publishes and prunes this repository's releases (permissions
+# below). The private staging packages are read with the optional GHCR_READ_TOKEN secret (a token that can read
+# packages) when it is set, otherwise with GITHUB_TOKEN, which needs the staging packages to grant this repository
+# Actions read access. The private repository never gives this repository a
 # credential: it only stages the draft and sends the dispatch with a short-lived app token.
 #
 # Re-run by hand with the workflow_dispatch inputs if a dispatch was missed. A run only ever publishes the
@@ -125,14 +126,16 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Copy the images by digest to the public names, with their signatures
-        # One credential against one registry: GITHUB_TOKEN reads the private staging packages (they grant this
-        # repository Actions read access) and writes the public ones (which are linked to this repository).
+        # GITHUB_TOKEN writes the public packages (they are linked to this repository). The private staging
+        # packages are read with the GHCR_READ_TOKEN secret when this repository has one, otherwise with
+        # GITHUB_TOKEN too (the staging packages then have to grant this repository Actions read access).
         # oras copies manifests and indexes byte for byte (no media-type conversion), so what users pull has
         # exactly the digest the private build produced; the check after the copy enforces it. The signature,
         # SBOM and provenance objects of an image live next to it under the tag sha256-<hex> (an OCI index);
         # they stay valid under the new name because they sign the digest, so they are copied too.
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SRC_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
           ACTOR: ${{ github.actor }}
           VERSION: ${{ steps.in.outputs.version }}
           PRERELEASE: ${{ steps.in.outputs.prerelease }}
@@ -141,21 +144,26 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          cfg="$RUNNER_TEMP/oras-config.json"
+          cfg="$RUNNER_TEMP/oras-config.json" src="$RUNNER_TEMP/oras-src.json"
           printf '%s' "$TOKEN" | oras login --registry-config "$cfg" -u "$ACTOR" --password-stdin ghcr.io >/dev/null
-          trap 'rm -f "$cfg"' EXIT
+          if [ -n "${SRC_TOKEN:-}" ]; then
+            printf '%s' "$SRC_TOKEN" | oras login --registry-config "$src" -u x --password-stdin ghcr.io >/dev/null
+          else
+            cp "$cfg" "$src"
+          fi
+          trap 'rm -f "$cfg" "$src"' EXIT
           copy_image() {
             local staging="$1" public="$2" digest="$3" hex tags t got
             hex="${digest#sha256:}"
-            oras cp --from-registry-config "$cfg" --to-registry-config "$cfg" "$staging@$digest" "$public:$VERSION"
+            oras cp --from-registry-config "$src" --to-registry-config "$cfg" "$staging@$digest" "$public:$VERSION"
             got=$(oras manifest fetch --registry-config "$cfg" --descriptor "$public:$VERSION" | jq -r .digest)
             [ "$got" = "$digest" ] || { echo "::error::$public:$VERSION is $got after the copy, expected $digest"; exit 1; }
-            tags=$(oras repo tags --registry-config "$cfg" "$staging" | { grep -E "^sha256-${hex}(\.[a-z0-9]+)?\$" || true; })
+            tags=$(oras repo tags --registry-config "$src" "$staging" | { grep -E "^sha256-${hex}(\.[a-z0-9]+)?\$" || true; })
             if [ -z "$tags" ]; then
               echo "::warning::$staging@$digest has no signature objects; the signature check below will fail unless the release is signed another way"
             fi
             for t in $tags; do
-              oras cp --from-registry-config "$cfg" --to-registry-config "$cfg" "$staging:$t" "$public:$t"
+              oras cp --from-registry-config "$src" --to-registry-config "$cfg" "$staging:$t" "$public:$t"
               echo "copied $t"
             done
             if [ "$PRERELEASE" = "false" ]; then
