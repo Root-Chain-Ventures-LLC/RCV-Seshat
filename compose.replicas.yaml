@@ -23,7 +23,7 @@ services:
       SESHAT_INSTANCE: seshat-1
   seshat2:
     <<: *hardened
-    image: ${SESHAT_IMAGE:-ghcr.io/root-chain-ventures-llc/seshat:0.2.0}
+    image: ${SESHAT_IMAGE:-ghcr.io/root-chain-ventures-llc/seshat:0.3.0}
     depends_on:
       postgres:
         condition: service_healthy

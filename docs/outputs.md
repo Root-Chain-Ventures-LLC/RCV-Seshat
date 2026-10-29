@@ -57,9 +57,30 @@ Fields: `event.{dataset,kind,module,action,id,category,type,severity}`, `message
 `observer.{vendor,name}`, `host.{name,ip,mac}`, `related.{ip,hosts}`,
 `seshat.source.{listener,input,protocol,ip,port,site,vrf,edge}`,
 `seshat.device.{status,id,name,vendor,model,os,site,role,tenant,pack,tags}`,
-`seshat.enrichment.level`, `seshat.trap.{oid,name,mib,enterprise,version,pdu_type}` and `known`.
+`seshat.enrichment.level`, `seshat.trap.{oid,name,mib,enterprise,version,pdu_type}`,
+`seshat.metric.{path,name,source,subscription}`, `seshat.metric.labels.<key>` and `known`.
 Short names: `severity`, `dataset`, `input`, `listener`, `vendor`, `model`, `device`, `site`, `role`,
 `tenant`. `GET /api/outputs/meta` lists them all.
+
+**Telemetry samples.** The fields of a `seshat.metric` event ([`inputs/telemetry.md`](inputs/telemetry.md))
+can be matched like any other text field, so a route can carry just the paths a consumer needs instead of
+every sample of every subscription. `seshat.metric.labels.<key>` reads one label (`interface`, `component`,
+`neighbor`, ...; the label names are in the event's `seshat.metric.labels`, they have no dots). A metric
+field of an event that is not a sample is unset, so `==`, `^=`, `=~` and `in` do not match it and `!=`, `!~` and
+`not in` do (a regular expression that matches the empty string, such as `.*`, therefore matches those events
+too; anchor it or add `event.dataset == "seshat.metric"`). Prefix and glob matching on the path use the
+existing `^=` and `=~`:
+
+```
+# transceiver power only, from any subscription
+seshat.metric.path =~ `^/components/component\[.*\]/transceiver/`
+
+# interface error counters of one interface family, from gNMI
+seshat.metric.name in ["in-errors", "out-errors"] && seshat.metric.labels.interface ^= "Ethernet" && seshat.metric.source == "gnmi"
+
+# everything under /interfaces, nothing else
+seshat.metric.path ^= "/interfaces/"
+```
 
 Expressions are compiled once when the route is saved (a bad one is refused with the column of the
 error). Evaluation allocates nothing; parsed addresses are cached per event across routes.

@@ -403,9 +403,16 @@ SQLite, which has no schemas, the same views exist as `tracker_public_<view>`.
   there is one set of tables and one set of `tracker_public` views. Its change feed
   (`tracker.Service.Stored`) wakes the push-sync publishers; with no portal configured it costs nothing.
 
-## Scope on the lookup
+## Scope on the lookup and the device routes
 
-`GET /api/tracker/lookup` and the CSV export answer only what the caller's scope allows. API tokens
+`GET /api/tracker/lookup`, the CSV export, the device list, a device's ports, a port's history and poll-now all
+answer only what the caller's scope allows, by the same test (a device is in scope when its site or its tenant is
+listed). A device outside the scope answers `404 not_found`, the same as an id that does not exist, so a scoped
+token cannot tell other sites' devices from missing ones; the device list leaves them out, and for a scoped caller
+it does not list the SNMP credential profile names either. `PUT /api/tracker/devices/{id}` follows the same rule.
+Routes that are not about one device (status, settings, watch and approved lists, API sources, OUI registry) and
+the device inventory (`/api/devices*`) are not filtered: they stay operator-only (see
+[`security.md`](security.md#api-tokens) for what a scoped operator token can still read and do). API tokens
 and every account with the `user` role, local or SSO, are limited to their own site/tenant scope, and
 an account with no scope sees nothing (a local `user` has no scope, so it sees nothing: use SSO groups
 or a scoped token); administrators and operators see everything. The portal in `api` mode adds the signed-in user's scope
@@ -413,3 +420,42 @@ as repeated `site=` and `tenant=` parameters, and both scopes must allow a fact 
 its site or its tenant is listed). A device none of whose facts is visible is left out of the answer.
 The response carries sites but not tenants, so a client cannot re-check a tenant scope itself; it
 relies on this filtering.
+
+A scope that admits every site and tenant (`*`) restricts nothing: such a token behaves like an operator session
+(it also reads the ports and history of a device that has left the inventory, and gets the profile names).
+
+Because the scope is the lookup's, **an API token with no scope sees nothing** on the device routes too, whatever
+its role (the token list marks an unscoped `tracker:read` token with a warning). Give a token the sites and tenants
+it needs, or `*` for all.
+
+### Read-only integration tokens (`tracker:read`)
+
+An integration that only needs to read the tracker (for example a change-planning tool that checks switches before a
+cutover) should not hold an operator token, which can also change device settings, watch lists and approved lists.
+Create a token with the role **`tracker:read`** (Settings, API tokens, or `POST /api/tokens` as an administrator):
+
+```json
+{"name": "cutover-check", "role": "tracker:read", "scope": {"sites": ["site-a"]}, "expires_in_days": 90}
+```
+
+It opens exactly these routes, within its site/tenant scope:
+
+| Route | |
+|---|---|
+| `GET /api/tracker/lookup`, `GET /api/tracker/export.csv` | lookup and CSV export |
+| `GET /api/tracker/devices` | the device list |
+| `GET /api/tracker/devices/{id}/ports` | a device's ports from the last full poll |
+| `GET /api/tracker/ports/{device}/{ifindex}/history` | who has been on a port |
+| `POST /api/tracker/devices/{id}/poll` | poll now: a read-only SNMP poll (no SET, no change on the device) |
+
+Every other route answers **403 `forbidden`** (never an empty list), including `PUT /api/tracker/devices/{id}`,
+settings, watch and approved lists, the account routes, `/metrics` and the OpenAPI document.
+Poll-now goes through the scheduler the UI's "Poll now" button uses: one poll of a device at a time (a second
+request while one runs gets a report saying so), the shared limit on concurrent polls, and the polling target
+policy and credential profiles of the site. For API tokens (this role and any other) it is limited further: a
+device an operator switched off is refused with `409 device_disabled`, and one device is polled at most once every
+60 seconds per Seshat instance, otherwise `429 rate_limited` with a `Retry-After` header. A signed-in session (the
+UI button) is not subject to either rule. Every call is audited as `token:<name>`. `tracker:read` is a token role
+only; an account cannot hold it. Data is not redacted for it (the `user` role's redactions do not apply), so scope
+it as you would an operator token.
+

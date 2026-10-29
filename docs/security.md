@@ -153,6 +153,29 @@ no credential can outlive the administrator behind it. Tokens that an earlier ve
 only while a live token of the parent's name does (a best-effort rule: names are not unique and the parent was
 not recorded), and tokens from before creators were recorded have no creator and are not tied to an account.
 
+A token's **role** decides which routes it opens (`admin`, `operator`, `user`), and its **scope** (sites and
+tenants) decides which Device Tracker data it sees: an unscoped token sees none. Two roles exist for tokens only:
+`sync` (push-sync ingest) and `tracker:read` (lookup, export, the device list, ports, port history and poll-now,
+read-only; every other route is 403). Routes that merely require a signed-in caller (the account routes) refuse both.
+See [`device-tracker.md`](device-tracker.md#read-only-integration-tokens-trackerread).
+
+**What a scope does not limit.** The scope of an `admin` or `operator` token is enforced on the lookup, the
+export and the Device Tracker device routes (device list, ports, port history, poll-now, `PUT
+/api/tracker/devices/{id}`). It is **not** enforced elsewhere, because those routes are written for operators:
+
+* A scoped operator token can still **read** the whole device inventory (`/api/devices`, `/api/devices/summary`,
+  `/api/devices/{id}`), the tracker status, settings, watch list and approved list, the API sources, and the
+  other administrative views its role opens.
+* It can still **do** what an operator does: for example set any credential profile name on a device in its scope
+  (`PUT /api/tracker/devices/{id}`), which makes Seshat poll that device with that profile's credentials, whatever
+  site the profile belongs to.
+
+So for an integration that only needs to read, use a **`tracker:read`** token with a scope, not an operator token:
+it opens only the lookup, the export, the device list, ports, port history and poll-now, and answers 403 everywhere
+else. Poll-now by any API token (this role included) is limited further: a device an operator switched off is
+refused (409 `device_disabled`) and one device is polled at most once a minute per instance (429 with
+`Retry-After`); a signed-in session is not limited.
+
 ## Cross-site request forgery
 
 State-changing requests that rely on the session cookie must come from this site: an `Origin` header naming

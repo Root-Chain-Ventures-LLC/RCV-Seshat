@@ -35,7 +35,7 @@ x-hardened: &hardened
 services:
   seshat:
     <<: *hardened
-    image: ${SESHAT_IMAGE:-ghcr.io/root-chain-ventures-llc/seshat:0.2.0}
+    image: ${SESHAT_IMAGE:-ghcr.io/root-chain-ventures-llc/seshat:0.3.0}
     restart: unless-stopped
     env_file:
       - path: .env

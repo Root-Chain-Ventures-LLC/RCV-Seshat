@@ -69,6 +69,7 @@
       "additionalProperties": false,
       "properties": {
         "mode": {"enum": ["external", "cnpg", "none"]},
+        "maxConns": {"type": "integer", "minimum": 0},
         "external": {"$ref": "#/definitions/secretRef"},
         "cnpg": {
           "type": "object",

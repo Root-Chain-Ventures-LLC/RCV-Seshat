@@ -116,6 +116,8 @@ red "Source addresses" tile. Alert on the check value if you scrape `/api/ready`
 | `cnpg` | the chart reads `<clusterName>-app` key `uri` of a CloudNativePG `Cluster` you applied from `deploy/k8s/examples/cloudnativepg/`. The chart does not manage the `Cluster`. |
 | `none` | embedded SQLite on the pod's volume; `replicaCount > 1` is refused unless `database.allowReplicatedSqlite=true` (each replica then has its own, unrelated database) |
 
+Set `database.maxConns` (`SESHAT_DATABASE_MAX_CONNS`, at least 8) to cap the main connection pool of each replica on a shared PostgreSQL; a replica holds at most that plus 6 connections (`docs/storage.md`, Connection budget).
+
 Seshat uses `LISTEN/NOTIFY` on one dedicated direct connection and an advisory lock: connect to the
 primary (`-rw`) Service, not through a transaction-pooling PgBouncer. Least-privilege roles and TLS
 (`sslmode=verify-full`) are in `docs/storage.md`.

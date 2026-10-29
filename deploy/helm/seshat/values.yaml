@@ -30,6 +30,9 @@ database:
   #            reads its connection Secret and never manages the Cluster.
   # none     : embedded SQLite on each pod's volume. One replica, or independent replicas (see allowReplicatedSqlite).
   mode: external
+  # Cap on the main connection pool per replica (SESHAT_DATABASE_MAX_CONNS). 0 = default: sized from the CPU count,
+  # never below 8. A replica holds at most maxConns + 6 connections (docs/storage.md, Connection budget).
+  maxConns: 0
   external:
     existingSecret: ""
     key: SESHAT_DATABASE_URL

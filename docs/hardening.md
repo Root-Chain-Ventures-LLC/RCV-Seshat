@@ -276,6 +276,10 @@ Resource limits are not imposed (they depend on your load): see the commented `m
    release, nodes refuse each other's drain calls and sync pauses, then resumes). The Device Tracker portal
    comes last. Every login session ends once at this upgrade (session ids are now derived from the key):
    users sign in again.
+   Create **`tracker:read`** API tokens only after every replica runs the release that introduced them, and revoke
+   them before rolling back: an older binary does not know the role and treats the token as an ordinary signed-in
+   caller on routes without a role list (the lookup, the export, the account routes). Rolling back does not narrow
+   the database constraint that allows the role.
 3. Packages keep your `*.env` files; `systemctl restart` happens only if the unit was running. Containers:
    pull or rebuild, `docker compose up -d`. Helm: `helm upgrade` (the migration hook runs first).
 

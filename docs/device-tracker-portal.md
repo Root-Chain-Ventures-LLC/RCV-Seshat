@@ -169,8 +169,8 @@ Sign-ins, token changes and settings changes are in the same log.
 
 ## API tokens
 
-`POST /api/tokens` (admin) creates a token with a role (`admin`, `operator`, `user`, or `sync` for push-sync senders), an optional site/tenant scope and an optional
-expiry; the secret (`tkr_...`) is returned once and only its SHA-256 is stored. Use it as `Authorization: Bearer tkr_...`. `GET /api/tokens` lists them
+`POST /api/tokens` (admin) creates a token with a role (`admin`, `operator`, `user`, `sync` for push-sync senders), an optional site/tenant scope and an optional
+expiry; the secret (`tkr_...`) is returned once and only its SHA-256 is stored. Use it as `Authorization: Bearer tkr_...`. (The read-only `tracker:read` role is for the main Seshat app only; on the portal it opens nothing.) `GET /api/tokens` lists them
 (without secrets; an unscoped sync token carries a `warnings` entry), `DELETE /api/tokens/{id}` revokes. A `sync` token can only call the ingest endpoint; other tokens cannot.
 For a `sync` token the scope is the set of sites and tenants the sender may write, and a scoped sync token must name its `stream_id`
 ([sender isolation](schema/tracker.md#sender-isolation)).

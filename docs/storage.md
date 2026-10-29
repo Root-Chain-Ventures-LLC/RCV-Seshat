@@ -23,7 +23,8 @@ Switch later with the copy tool (below). Migrations are embedded and run at star
 - A database and a role of your own, see [Roles](#roles-and-tls). Seshat uses its own schema.
 - A **direct** connection for change notifications. Seshat opens one extra dedicated connection per
   replica for `LISTEN` and one for leader election, besides the main pool (at least 8 connections, more on hosts
-  with more than 8 CPUs) and two helper pools of 2. Budget at least 14 connections per replica.
+  with more than 8 CPUs) and two helper pools of 2. Budget at least 14 connections per replica, and see
+  [Connection budget](#connection-budget) to cap the main pool.
 - **PgBouncer**: in `session` pooling mode everything works. In `transaction` or `statement` pooling
   mode `LISTEN` silently never delivers and a session advisory lock is released as soon as the
   transaction ends, which would give every replica leadership. Do not put the election or notification
@@ -31,6 +32,32 @@ Switch later with the copy tool (below). Migrations are embedded and run at star
   give Seshat a session-mode PgBouncer database. If `LISTEN` cannot be established Seshat falls back to
   polling by itself (see below), but the leader election has no fallback: use a direct connection.
 - Time: replicas compare nothing by wall clock except the lease display; NTP is still good hygiene.
+
+### Connection budget
+
+Per replica, Seshat holds at most:
+
+| Connections | Used for |
+|-------------|----------|
+| main pool: N | queries and writes |
+| 1 | the dedicated `LISTEN` session (change notifications) |
+| 1 | the leader-election session |
+| 2 x 2 | the helper pools of the notifier and the elector |
+
+N is the larger of 8 and the pool cap. Without a cap the pool grows with the CPU count, so a few replicas
+on large nodes can exhaust the `max_connections` of a shared server. Cap it with `SESHAT_DATABASE_MAX_CONNS`
+(Helm: `database.maxConns`) or with `pool_max_conns` in the URL. The setting wins when both are present. A URL
+value below 8 is raised to 8; `SESHAT_DATABASE_MAX_CONNS` below 8 is refused at start.
+
+With a cap of 8 a replica uses at most 8 + 1 + 1 + 4 = 14 connections, so three replicas need 42, plus
+what `psql` sessions, monitoring and other applications use. Keep `max_connections` comfortably above that.
+
+The other `pool_*` URL parameters (`pool_min_conns`, `pool_min_idle_conns`, `pool_max_conn_lifetime`,
+`pool_max_conn_lifetime_jitter`, `pool_max_conn_idle_time`, `pool_health_check_period`, `pool_ping_timeout`)
+apply to the main pool only. The `LISTEN` and election sessions are single connections and ignore them;
+they are never sent to the server. Version 0.2.0 and earlier sent them, and PostgreSQL then refused
+the connection (`unrecognized configuration parameter "pool_max_conns"`), which left every replica without a
+leader and on 2 s polling.
 
 ## Change fan-out
 

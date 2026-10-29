@@ -129,6 +129,10 @@ app.kubernetes.io/component: {{ index . 1 }}
       name: {{ default (printf "%s-app" .Values.database.cnpg.clusterName) .Values.database.cnpg.secretName }}
       key: {{ .Values.database.cnpg.key }}
 {{- end }}
+{{- if and (ne .Values.database.mode "none") (gt (int .Values.database.maxConns) 0) }}
+- name: SESHAT_DATABASE_MAX_CONNS
+  value: {{ int .Values.database.maxConns | quote }}
+{{- end }}
 {{- end -}}
 
 {{/* Pod and container security. Root is needed only for NET_RAW (preserve_source) and for
