@@ -37,7 +37,7 @@
 name: seshat-anycast
 
 x-seshat: &seshat
-  image: ghcr.io/root-chain-ventures-llc/seshat:0.3.0
+  image: ghcr.io/root-chain-ventures-llc/seshat:0.3.1
   restart: unless-stopped
   network_mode: host
   user: "0:0"

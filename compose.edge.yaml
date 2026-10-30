@@ -34,7 +34,7 @@ x-hardened: &hardened
 services:
   seshat-edge:
     <<: *hardened
-    image: ${SESHAT_IMAGE:-ghcr.io/root-chain-ventures-llc/seshat:0.3.0}
+    image: ${SESHAT_IMAGE:-ghcr.io/root-chain-ventures-llc/seshat:0.3.1}
     restart: unless-stopped
     command: ["--role", "edge"]
     env_file:
