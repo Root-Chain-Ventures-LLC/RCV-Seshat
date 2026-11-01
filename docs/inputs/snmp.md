@@ -14,7 +14,7 @@ informs (with the acknowledgement the protocol requires) and v3 engine discovery
 | `SESHAT_DEBUG_NDJSON_PATH` | empty | Optional. Appends every event as one JSON line to this file (a debugging aid; the real outputs are described in `docs/outputs.md`). |
 
 The listener runs when `--role` is `all`, `collector` or `edge`. `GET /api/ready` includes an
-`snmp_trap` check on those roles (visible to an administrator, an operator or the metrics token; anonymous callers get only the verdict).
+`snmp_trap` check on those roles (visible to an administrator, an operator, a viewer or the metrics token; anonymous callers get only the verdict).
 
 ## What is decoded
 
@@ -173,7 +173,7 @@ snmpinform -v3 -l authPriv -u trapuser -a SHA -A 'example-auth-passphrase' \
 Site and VRF: the page's Site and VRF fields (`site`, `vrf` in `PUT /api/inputs/snmp`) tag everything this listener receives with `seshat.source.site` / `seshat.source.vrf`. They are part of a device's identity in the device knowledge base (`docs/device-kb.md`), so the same address at two sites stays two devices. Leave them empty for the `default` site. Each trap's sysName (when the sender includes it) and a v3 sender's engine ID are reported to the knowledge base as learning signals.
 
 See what arrived: the SNMP page's live tail, or `GET /api/events/tail?dataset=seshat.trap&limit=20`
-(administrator or operator; the last 500 events in memory).
+(administrator, operator or viewer; the last 500 events in memory).
 
 
 ## Known limits

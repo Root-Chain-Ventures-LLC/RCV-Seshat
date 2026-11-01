@@ -37,6 +37,7 @@ Each release carries the install artifacts and nothing else (the release notes a
 |---|---|
 | `seshat`, `seshat-device-tracker`, `seshat-edge` as `.deb` and `.rpm` | Linux packages for amd64 and arm64 with systemd units |
 | `seshat_<version>_linux_<arch>.tar.gz` | static binaries and the built-in vendor packs |
+| `seshat-appliance_<version>_amd64.qcow2`, `seshat-appliance_<version>_amd64.ova` | the virtual appliance: a ready-to-run Debian-based VM disk for KVM / Proxmox (qcow2) and VMware / VirtualBox / Proxmox import (OVA); see [`docs/packaging.md`](docs/packaging.md) |
 | `install-bundle.tar.gz` | the compose files, `.env.example`, systemd units and drop-ins |
 | `SHA256SUMS`, `SHA256SUMS.sig`, `cosign.pub` | checksums, their signature and the public key |
 | `*.spdx.json` | software bills of materials for the source tree and both images |

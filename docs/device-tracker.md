@@ -337,13 +337,14 @@ setting is on (high volume). The fields are in [`schema/fields.md`](schema/field
 
 ## Roles and the API
 
-| Endpoint | user | operator, admin |
-|---|---|---|
-| `GET /api/tracker/lookup?q=` | yes | yes |
-| `GET /api/tracker/export.csv?q=` | yes (its own query) | yes |
-| everything else under `/api/tracker/` | 403 | yes |
+| Endpoint | user | viewer | operator, admin |
+|---|---|---|---|
+| `GET /api/tracker/lookup?q=` | yes | yes | yes |
+| `GET /api/tracker/export.csv?q=` | yes (its own query) | yes | yes |
+| every other `GET` under `/api/tracker/` (status, settings, devices, ports, port history, sources, lists, OUI) | 403 | yes | yes |
+| every `PUT`, `POST`, `PATCH` and `DELETE` under `/api/tracker/` (including poll-now) | 403 | 403 | yes |
 
-A `user` gets `403 forbidden`, never an empty list. Every lookup, export and port history is written
+A `user` or `viewer` gets `403 forbidden` where the table says so, never an empty list. Every lookup, export and port history is written
 to the audit log (who, what, when). Settings can hide facts from the `user` role (user name,
 hostname, inventory trace, user history, IP history); the hidden paths are listed in the response's
 `redactions` so the UI can say "hidden by policy". CSV cells that start with `=`, `+`, `-` or `@` are
@@ -415,7 +416,7 @@ the device inventory (`/api/devices*`) are not filtered: they stay operator-only
 [`security.md`](security.md#api-tokens) for what a scoped operator token can still read and do). API tokens
 and every account with the `user` role, local or SSO, are limited to their own site/tenant scope, and
 an account with no scope sees nothing (a local `user` has no scope, so it sees nothing: use SSO groups
-or a scoped token); administrators and operators see everything. The portal in `api` mode adds the signed-in user's scope
+or a scoped token); administrators, operators and viewers see everything. The portal in `api` mode adds the signed-in user's scope
 as repeated `site=` and `tenant=` parameters, and both scopes must allow a fact (a fact is visible when
 its site or its tenant is listed). A device none of whose facts is visible is left out of the answer.
 The response carries sites but not tenants, so a client cannot re-check a tenant scope itself; it

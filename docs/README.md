@@ -5,7 +5,7 @@ The pages below are the operator's view of each part. Start with the deployment 
 | Topic | Page | What is in it |
 |---|---|---|
 | Deploying safely | [`hardening.md`](hardening.md) | What Seshat holds and exposes, the TLS proxy, the secret key, the first-run setup token, firewall rules, edges, HA, backups, upgrading, verifying a release |
-| Linux packages | [`packaging.md`](packaging.md) | The `seshat`, `seshat-device-tracker` and `seshat-edge` .deb/.rpm: contents, install, upgrade, uninstall, paths, capability drop-ins per HA mode |
+| Linux packages and virtual appliance | [`packaging.md`](packaging.md) | The `seshat`, `seshat-device-tracker` and `seshat-edge` .deb/.rpm: contents, install, upgrade, uninstall, paths, capability drop-ins per HA mode; the virtual-appliance image (qcow2 / OVA): import, first boot, updates, data and backup |
 | Kubernetes | [`kubernetes.md`](kubernetes.md) | Helm chart: install, values examples, database and migration hook, Lease leader election, drain and rolling upgrades, scaling, host network, the portal, troubleshooting |
 | Security and access | [`security.md`](security.md) | Trusted proxies, sign-in limits and lockout, sessions, the first-run setup token, metrics authentication, API token expiry, CSRF, who sees what in Device Lookup, audit retention |
 | Secrets and keys | [`secrets.md`](secrets.md) | How credentials are sealed, what must never hold one, clearing secrets, `seshat secrets rekey`, file permissions, transport security |

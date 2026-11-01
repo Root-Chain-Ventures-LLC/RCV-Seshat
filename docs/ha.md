@@ -494,7 +494,7 @@ Alert on `seshat_bgp_session_state != 6` for more than a minute, on
 `sum(seshat_bgp_prefix_announced{prefix="198.51.100.10/32"}) < 2` (fewer than two replicas
 announcing) and on `increase(seshat_bgp_withdrawals_total[10m]) > 3` (flapping).
 
-API: `GET /api/cluster/bgp` (admin, operator: speaker state, neighbours with session state, uptime,
+API: `GET /api/cluster/bgp` (admin, operator, viewer: speaker state, neighbours with session state, uptime,
 prefixes sent and received, flaps and the last error, prefixes with the reason for any withdrawal,
 the configuration without passwords, the other nodes' states), `PUT /api/cluster/bgp`,
 `POST /api/cluster/bgp/withdraw`, `POST /api/cluster/bgp/announce` (admin). The Cluster page shows
@@ -525,7 +525,7 @@ a packet, and a loud failure when the balancer rewrites source addresses.
 | Endpoint | Meaning |
 |---|---|
 | `GET /api/health` | liveness: `200 {"ok":true}`, unauthenticated, plain HTTP. Never fails while draining. |
-| `GET /api/ready` | readiness: 200 when the store and every listener are up, 503 otherwise **and while draining**. Anonymous callers get only `{"ready":true|false}` and the status code; the body of an administrator, an operator or the `SESHAT_METRICS_TOKEN` bearer also names each check (`store`, `snmp_trap`, `syslog-udp`, ..., `drain`, `source_ip`). Point the balancer's health check here. |
+| `GET /api/ready` | readiness: 200 when the store and every listener are up, 503 otherwise **and while draining**. Anonymous callers get only `{"ready":true|false}` and the status code; the body of an administrator, an operator, a viewer or the `SESHAT_METRICS_TOKEN` bearer also names each check (`store`, `snmp_trap`, `syslog-udp`, ..., `drain`, `source_ip`). Point the balancer's health check here. |
 | `POST /api/drain?timeout_seconds=N` | become not ready, then wait (at most N seconds, default 25, maximum 600) for the destination queues to flush. Admin session, or the `X-Seshat-Drain-Token` header (an HMAC of `SESHAT_SECRET_KEY`, what `seshat --drain` sends). Intake is **not** paused: packets already in flight are accepted, not lost. `DELETE /api/drain` (admin) cancels. |
 | `seshat --drain [--drain-timeout 25s] [--drain-hold 10s]` | the same call from the CLI, for `preStop` hooks, systemd `ExecStop` and keepalived notify scripts; `--drain-hold` keeps it from returning early so a health check can notice. Exit 0 when the instance is already gone. |
 
@@ -542,7 +542,7 @@ intervals) -> SIGTERM -> the process stops its listeners, flushes queues, exits.
 
 `SESHAT_EXPECT_SOURCE_IP_PRESERVED=true` with `SESHAT_LB_SNAT_CIDRS=<ranges>` turns on a check in the
 listeners (SNMP, syslog UDP/TCP, flows). When a datagram or connection arrives from one of the
-ranges you listed (the balancer's SNAT pool, the cluster's node addresses), `/api/ready` reports (to an administrator, an operator or the metrics token)
+ranges you listed (the balancer's SNAT pool, the cluster's node addresses), `/api/ready` reports (to an administrator, an operator, a viewer or the metrics token)
 `"source_ip": "snat_detected"`, the log carries `SOURCE ADDRESS REWRITING DETECTED` once a minute
 while it continues, and the Dashboard shows a red "Source addresses" tile. The pod stays ready: the
 check informs, because pulling every pod out of rotation would also take the UI away. The compare
@@ -624,7 +624,7 @@ Alert on `seshat_vrrp_state == 2` summing to other than one per instance across 
 nobody holds the address; two: split brain), and on `rate(seshat_vrrp_transitions_total[10m]) > 4`
 (flapping).
 
-API (all under `/api`, role-gated; see `/api/openapi.json`): `GET /cluster` (admin, operator),
+API (all under `/api`, role-gated; see `/api/openapi.json`): `GET /cluster` (admin, operator, viewer),
 `PUT /cluster/vrrp`, `POST /cluster/drain`, `POST /cluster/undrain` (admin). BGP (mode 3): see
 [Mode 3](#mode-3-bgp-anycast).
 

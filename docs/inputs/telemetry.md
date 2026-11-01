@@ -37,7 +37,7 @@ answer), allows 20 s for the HTTP/2 and TLS handshake, and caps request headers 
 when it is bound to anything but a loopback address Seshat logs a warning at start. Anyone who can
 reach the port can then feed it metrics. Use TLS (and a client CA to require device certificates), the
 allow-list, and a firewall; bind it to `127.0.0.1` when only a local relay talks to it.
-| Targets, subscriptions, allow-list, site, VRF | Inputs, Telemetry; `GET/PUT /api/inputs/telemetry` | none | Admin changes, operator reads. All of it applies immediately. |
+| Targets, subscriptions, allow-list, site, VRF | Inputs, Telemetry; `GET/PUT /api/inputs/telemetry` | none | Admin changes, operator and viewer read. All of it applies immediately. |
 
 Publishing the port: `compose.yaml` maps `57400:57400` (tcp), the Helm chart exposes it as
 `intake.ports.telemetryDialout` (`{enabled: true, port: 57400}`, a TCP port on the intake Service
@@ -232,7 +232,7 @@ the transport for TLS.
 | `seshat_telemetry_dropped_total{reason}` | `allow_list`, `decode_error`, `unsupported_value`, `too_many_sessions`, `stream_limit_source`, `conn_limit`, `conn_limit_source` |
 | `seshat_telemetry_sessions{state}` | sessions by state (`connecting`, `established`, `backoff`, `disabled`); dial-out streams count as `established` |
 
-`/api/ready` reports the dial-out listener as `telemetry-dialout` (to an administrator, an operator or the metrics token; anonymous callers get only the verdict).
+`/api/ready` reports the dial-out listener as `telemetry-dialout` (to an administrator, an operator, a viewer or the metrics token; anonymous callers get only the verdict).
 
 
 ## What was tested, and what was not

@@ -291,11 +291,12 @@ jobs:
             grep -qxF "$f" ../listed.txt || { echo "::error::in the release but not covered by SHA256SUMS: $f"; fail=1; }
           done
           # Only install artifacts are ever published, and all of them must be there.
-          debs=0; rpms=0; tars=0; sboms=0
+          debs=0; rpms=0; tars=0; sboms=0; appliances=0
           for f in *; do
             case "$f" in
               SHA256SUMS|SHA256SUMS.sig|cosign.pub|install-bundle.tar.gz) ;;
               seshat_*_linux_amd64.tar.gz|seshat_*_linux_arm64.tar.gz) tars=$((tars + 1)) ;;
+              seshat-appliance_*_amd64.qcow2|seshat-appliance_*_amd64.ova) appliances=$((appliances + 1)) ;;
               seshat_*.spdx.json|seshat-device-tracker_*.spdx.json) sboms=$((sboms + 1)) ;;
               seshat_*.deb|seshat-device-tracker_*.deb|seshat-edge_*.deb) debs=$((debs + 1)) ;;
               seshat-*.rpm) rpms=$((rpms + 1)) ;;
@@ -303,8 +304,8 @@ jobs:
             esac
           done
           [ -f install-bundle.tar.gz ] || { echo "::error::install-bundle.tar.gz is missing"; fail=1; }
-          if [ "$debs" -ne 6 ] || [ "$rpms" -ne 6 ] || [ "$tars" -ne 2 ] || [ "$sboms" -ne 3 ]; then
-            echo "::error::expected 6 .deb, 6 .rpm, 2 tarballs and 3 SBOMs, found $debs, $rpms, $tars, $sboms"; fail=1
+          if [ "$debs" -ne 6 ] || [ "$rpms" -ne 6 ] || [ "$tars" -ne 2 ] || [ "$sboms" -ne 3 ] || [ "$appliances" -ne 2 ]; then
+            echo "::error::expected 6 .deb, 6 .rpm, 2 tarballs, 3 SBOMs and 2 appliance images, found $debs, $rpms, $tars, $sboms, $appliances"; fail=1
           fi
           [ "$fail" -eq 0 ] || exit 1
           echo "verified $(find . -type f | wc -l) assets against the signed SHA256SUMS"

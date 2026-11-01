@@ -27,11 +27,11 @@ The roles `all`, `collector` and `edge` start the listeners; `console` does not 
 
 The operator-editable part (allow-list, per-exporter rate limit, per-exporter sampling overrides,
 site and VRF, Community ID, roll-ups, listen addresses) lives in **Inputs, Flows** and in
-`GET/PUT /api/inputs/flow` (admin to change, operator to read). Everything applies immediately
+`GET/PUT /api/inputs/flow` (admin to change, operator or viewer to read). Everything applies immediately
 except the listen addresses, which apply at the next start (`restart_required` is shown meanwhile).
 The environment values are the defaults until the settings are saved once.
 
-`/api/ready` reports each enabled listener to an administrator, an operator or the metrics token (anonymous callers get only the verdict).
+`/api/ready` reports each enabled listener to an administrator, an operator, a viewer or the metrics token (anonymous callers get only the verdict).
 
 ## Pointing devices at Seshat
 

@@ -132,7 +132,7 @@ each secret that shows *set*.
   parameter whose name contains `token`, `key`, `secret`, `pass`, `pwd`, `auth`, `sig`, `cred`,
   `bearer`, `session`, `cookie` or `jwt` (so `?token=`, `?api_key=`, `?X-Amz-Signature=` ...).
 
-They are sealed in place at rest, returned as `***` to every role (admin and operator) by every
+They are sealed in place at rest, returned as `***` to every role (admin, operator and viewer) by every
 endpoint, and kept when an update sends the `***` back (a header or parameter you leave out is
 removed; a `***` with nothing stored behind it is a validation error). Destinations written by an
 older version with these values in the clear keep working and are sealed at the next start (or the
@@ -201,10 +201,23 @@ volume (or lower the limits). An empty queue occupies almost nothing. Mount `/da
 that outlives the container.
 
 Crash safety: on start each segment is validated record by record and a torn or corrupt tail is
-cut off (logged, and visible as `recovered_bytes` in the status). Delivery is **at least once**:
-the offset is saved after each acknowledged batch but synced to disk at most once per second
-(`fsync: always` syncs every record and every commit), so after a crash up to about a second of
-already-delivered events may be sent again. Elasticsearch and OpenSearch destinations use the event
+cut off, in whichever segment it is; the records of the segments after a damaged one are kept
+(logged, and visible as `recovered_bytes` in the status). Delivery is **at least once**: the offset
+is saved after each acknowledged batch but synced to disk at most once per second (`fsync: always`
+syncs every record and every commit), so after a crash up to about a second of already-delivered
+events may be sent again.
+
+Durability and ordering. With `fsync: always` a batch is on disk when it is acknowledged,
+including the segment it rolled past, and so is the directory entry of a new segment and the
+renamed `consumer.pos`. With `interval` (the default) data is synced at most one interval after it
+was written, and **a segment is always made durable before the segment after it**: the sync of a
+rolled segment runs in the background, and nothing newer is synced until it has finished, so a
+crash can lose the last second of events but never leaves later events behind a hole. If an
+`fsync` fails, the failure is counted (`queue_sync_errors`, with the latest in `queue_sync_error`
+in the status), the segment stays dirty and is synced again after a short pause, and the segments
+after it are not synced until it succeeds. The append path takes no lock for an `fsync` except in
+one place: when the next segment roll finds the previous rolled segment still being synced (a stalled
+or failing disk), the roll, and with it the receive path, waits for it. Elasticsearch and OpenSearch destinations use the event
 id as the document `_id`, so a repeat is a harmless version conflict. Disabling a destination or
 stopping Seshat keeps its queue; deleting a destination deletes it (`?keep_queue=true` keeps it).
 
@@ -751,14 +764,14 @@ Per destination (`dest` label):
 | `seshat_output_sender_total{dest,counter}` | counters an output type keeps itself; `snmp_trap`: `traps_sent`, `informs_acked`, `informs_unacked`, `send_errors`, `rate_limited`, `skipped` |
 
 Also `seshat_route_unrouted_total`, `seshat_route_matched_total{route}` and
-`seshat_output_destinations{state}`. `GET /api/ready` includes `"outputs": "configured=N healthy=M"` (for an administrator, an operator or the metrics token)
+`seshat_output_destinations{state}`. `GET /api/ready` includes `"outputs": "configured=N healthy=M"` (for an administrator, an operator, a viewer or the metrics token)
 and never fails readiness because a destination is down. A destination's state is `healthy`,
 `degraded` (a failed attempt, a full queue or backpressure), `failing` (three or more consecutive
 failures), `paused` (drained), `disabled` or `invalid` (its stored configuration cannot be built).
 
 ## API
 
-Administrators write, operators read, users get 403.
+Administrators write, operators and viewers read, users get 403.
 
 | Method and path | |
 |---|---|

@@ -172,7 +172,7 @@ time before every edge has renewed drops the older CA and locks the stragglers o
 | `SESHAT_EDGE_REQUIRE_MTLS` | `1` refuses bearer tokens on every listener; edges must then use the dedicated listener. |
 | `SESHAT_EDGE_TOKEN_MAX_AGE` | Lifetime of an edge bearer token, default `400d`, `0` = never (see Authentication). |
 
-Roles: **admin** writes (create, configure, rotate, revoke, rotate CA), **operator** reads, **user** gets `403`.
+Roles: **admin** writes (create, configure, rotate, revoke, rotate CA), **operator** and **viewer** read, **user** gets `403`.
 Every write is in the audit log (the token never is). The enrolment token is returned once, with
 `Cache-Control: no-store`, and only its hash is stored.
 

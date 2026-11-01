@@ -115,8 +115,8 @@ variables (those fields then show read-only). In the provider, register this red
 | Issuer, client ID, client secret | `SESHAT_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET` | The secret is stored encrypted. Issuers must be `https` (`http` only for localhost). Leaving the secret empty keeps it; changing the issuer or client ID removes it (enter the new one); `"clear_client_secret": true` (the *Remove the stored client secret* box) removes it. |
 | Scopes | `SESHAT_OIDC_SCOPES` | Default `openid profile email`; add the one your provider needs for groups. |
 | Groups claim | `SESHAT_OIDC_GROUPS_CLAIM` | Default `groups`. If the ID token lacks it, the userinfo endpoint is asked. |
-| Group to role | `SESHAT_OIDC_ADMIN_GROUPS`, `_OPERATOR_GROUPS`, `_USER_GROUPS` | Comma separated. The highest matching role wins. |
-| Anyone else | `SESHAT_OIDC_DEFAULT_ROLE` | `user` (default), `operator`, or `deny`. |
+| Group to role | `SESHAT_OIDC_ADMIN_GROUPS`, `_OPERATOR_GROUPS`, `_VIEWER_GROUPS`, `_USER_GROUPS` | Comma separated. The highest matching role wins (admin, operator, viewer, user). `viewer` is the read-only staff role of the full Seshat console; on the portal it needs no special handling: like every non-administrator it sees what its groups map to (below). Settings > Sign-in has a field for each role. |
+| Anyone else | `SESHAT_OIDC_DEFAULT_ROLE` | `user` (default), `operator`, `viewer`, or `deny`. |
 | Group to scope | `SESHAT_OIDC_SCOPE_MAP` | `group=site:a\|site:b\|tenant:c;other=*`. Rules add up. |
 | Password sign-in | `SESHAT_OIDC_LOCAL_LOGIN` | Off hides the password form. |
 
@@ -169,7 +169,7 @@ Sign-ins, token changes and settings changes are in the same log.
 
 ## API tokens
 
-`POST /api/tokens` (admin) creates a token with a role (`admin`, `operator`, `user`, `sync` for push-sync senders), an optional site/tenant scope and an optional
+`POST /api/tokens` (admin) creates a token with a role (`admin`, `operator`, `viewer`, `user`, `sync` for push-sync senders), an optional site/tenant scope and an optional
 expiry; the secret (`tkr_...`) is returned once and only its SHA-256 is stored. Use it as `Authorization: Bearer tkr_...`. (The read-only `tracker:read` role is for the main Seshat app only; on the portal it opens nothing.) `GET /api/tokens` lists them
 (without secrets; an unscoped sync token carries a `warnings` entry), `DELETE /api/tokens/{id}` revokes. A `sync` token can only call the ingest endpoint; other tokens cannot.
 For a `sync` token the scope is the set of sites and tenants the sender may write, and a scoped sync token must name its `stream_id`

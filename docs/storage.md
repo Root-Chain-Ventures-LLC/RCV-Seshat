@@ -100,7 +100,7 @@ replica **steps down at once**; another replica takes the lock within about 5 s.
 a **fencing token** stored with a lease (`until`) in the `leader` table. A singleton job calls
 `Check(token)` before it writes and is refused when a newer leader exists. SQLite: always the leader.
 
-`GET /api/cluster/leader` (admin or operator) shows this replica, who leads, the token and the lease.
+`GET /api/cluster/leader` (admin, operator or viewer) shows this replica, who leads, the token and the lease.
 `seshat_cluster_leader{instance}` is 1 on the leader. `SESHAT_LEADER_ELECTOR=k8s-lease` (what the Helm chart sets with `leaderElection.mode=k8s-lease`) replaces the
 advisory lock with a Kubernetes Lease behind the same election interface; the fencing
 token is then the Lease's `leaseTransitions`. SQLite ignores it (every replica leads its own database).

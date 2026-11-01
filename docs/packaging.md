@@ -4,7 +4,8 @@ Seshat ships three Linux packages, each as `.deb` and `.rpm` for `amd64` (`x86_6
 (`aarch64`). They hold static binaries (the web UI embedded) and depend on nothing but systemd and the
 usual base system. Every release attaches them, together with binary tarballs, an install bundle and
 `SHA256SUMS`. Containers and Kubernetes are covered by the README and
-[`kubernetes.md`](kubernetes.md); a virtual-appliance image is not available yet.
+[`kubernetes.md`](kubernetes.md). A ready-to-run virtual machine image (qcow2 and OVA) is described under
+"Virtual appliance" below.
 
 | Package | What it runs | Unit | Configuration | State |
 |---|---|---|---|---|
@@ -166,9 +167,212 @@ userdel seshat
 | Release asset | Contents |
 |---|---|
 | `seshat_<v>_linux_<arch>.tar.gz` | `seshat`, `device-tracker`, `packs/`, `LICENSE` |
+| `seshat-appliance_<v>_amd64.qcow2`, `.ova` | the virtual appliance (below) |
 | `install-bundle.tar.gz` | the compose files, `.env.example`, the systemd units and drop-ins, the env examples |
 | `SHA256SUMS` | checksums of every asset |
 | `SHA256SUMS.sig`, `cosign.pub` | the signature over `SHA256SUMS` and the public key to check it with (when the release was signed) |
 | `*.spdx.json` | SPDX software bills of materials: the source tree and both images |
 
 Verifying the signature: [`hardening.md`](hardening.md), "Verifying a release".
+
+## Virtual appliance
+
+Every release also carries a ready-to-run virtual machine: Debian 13 ("trixie") with the `seshat` package of the
+same release installed and started. It listens on its own ports and on SSH (keys only), nothing else ([Ports](#ports)). Use it when you would rather import a VM than install
+a package on a server you maintain.
+
+| File | For |
+|---|---|
+| `seshat-appliance_<version>_amd64.qcow2` | KVM and libvirt, Proxmox VE, OpenStack and anything else that reads qcow2 |
+| `seshat-appliance_<version>_amd64.ova` | VMware ESXi, Workstation and Fusion, VirtualBox, and Proxmox VE (`qm importovf`) |
+
+Both hold the same disk (8 GiB virtual size, about 270 MB to download; the system uses about 0.5 GiB of it until your
+data grows) and boot with BIOS or UEFI firmware, with **Secure Boot off**: the boot loader is an unsigned GRUB (no
+shim), so a firmware that enforces Secure Boot refuses it. They are listed in `SHA256SUMS` like every other asset: verify the
+signature and the checksum first ([`hardening.md`](hardening.md), "Verifying a release").
+
+**What is in it.** A minimal Debian (no desktop, no compiler, no mail server), the `seshat` package, systemd-networkd
+(DHCP on every wired interface), time synchronisation, `cloud-init` (see below), an SSH server that accepts keys
+only, the QEMU guest agent and Open VM Tools. **What is not:** the Device Tracker portal
+([`device-tracker-portal.md`](device-tracker-portal.md)) and the edge collector ([`edge.md`](edge.md)). The portal is
+meant for people outside the collectors' network and runs as a different user with its own key on purpose, so it does
+not belong on the same machine; install its package on a separate host. Edges are installed on the remote sites'
+own hosts.
+
+**Sizing.** 2 vCPUs and 2 GiB of memory are the starting point (the OVA asks for exactly that); give it more for
+high event rates ([`inputs/`](inputs)). The disk grows with your data (below).
+
+**Licences and sources.** The image is Debian: its packages (the Linux kernel, GNU tools, systemd, GRUB and the rest)
+are under their own licences, many of them the GPL and LGPL, and their licence texts are in the image under
+`/usr/share/doc/<package>/copyright`. `/usr/share/seshat-appliance/packages.txt` lists every installed package with its
+exact version and the source package and version it was built from, and `/etc/seshat-appliance-release` names the
+Debian archive snapshot (`DEBIAN_SNAPSHOT`) the image was built from. The corresponding sources of those versions are
+available from Debian's archive at snapshot.debian.org for that date. Seshat itself is under the licence in its
+`LICENSE` file (also in the image, `/usr/share/doc/seshat/LICENSE`).
+
+### Import
+
+Proxmox VE (the qcow2; storage and bridge names are yours):
+
+```sh
+qm create 9000 --name seshat --memory 2048 --cores 2 --net0 virtio,bridge=vmbr0 --scsihw virtio-scsi-pci \
+  --agent enabled=1 --serial0 socket --ostype l26
+qm importdisk 9000 seshat-appliance_<version>_amd64.qcow2 local-lvm
+qm set 9000 --scsi0 local-lvm:vm-9000-disk-0 --boot order=scsi0
+qm start 9000
+```
+
+Or the OVA: `qm importovf 9000 seshat-appliance_<version>_amd64.ova local-lvm`. For SSH keys and a fixed address use
+Proxmox's cloud-init drive (`qm set 9000 --ide2 local-lvm:cloudinit --ciuser admin --sshkeys keys.pub --ipconfig0
+ip=192.0.2.20/24,gw=192.0.2.1`); the appliance reads it like any NoCloud seed, and the keys go to the user you name
+with `--ciuser` (`admin` here).
+
+**Secure Boot.** Leave the VM on the default SeaBIOS firmware, or, for UEFI, turn Secure Boot off. Proxmox: with
+`--bios ovmf`, create the EFI disk without the pre-enrolled keys (`--efidisk0 local-lvm:1,efitype=4m,pre-enrolled-keys=0`),
+because OVMF's default keys enforce Secure Boot. Hyper-V generation 2: clear *Enable Secure Boot* in the VM's
+firmware settings. VMware: leave *Secure Boot* unchecked under *VM Options > Boot Options*. libvirt/QEMU: use an OVMF
+build without enrolled keys.
+
+KVM with libvirt: `virt-install --name seshat --memory 2048 --vcpus 2 --import --disk
+path=seshat-appliance_<version>_amd64.qcow2,bus=virtio --network bridge=br0 --osinfo debian13 --graphics none`.
+
+VMware: *File > Deploy OVF Template* (ESXi: *Create / Register VM > Deploy a virtual machine from an OVF or OVA
+file*) and pick the `.ova`. VirtualBox: *File > Import Appliance*. The OVA presents an LSI Logic SCSI disk and an
+Intel E1000 network adapter, which every one of them offers; switch to paravirtual devices afterwards if you wish
+(the kernel has the drivers). The disk controllers tried at release time are virtio-blk, virtio-scsi and LSI Logic
+SCSI; SATA and NVMe drivers are in the initial RAM disk and are expected to work, but are not part of the release
+test.
+
+### First boot
+
+1. The VM gets an address by DHCP (IPv4, and IPv6 router advertisements). On its first boot it makes what must be
+   unique per machine: the secret key that seals stored credentials, the SSH host keys, the machine id and a
+   one-time **setup token**. None of them is in the image, so two VMs from one image share nothing.
+2. The VM console (and the serial console, 115200 baud) shows the address and the token above the login prompt:
+
+   ```
+    Seshat appliance <version>
+
+    Console:  http://192.0.2.20:8080
+
+    First-run setup: open the console from a trusted network and enter this one-time
+    setup token to create the administrator:
+
+        0f3a...   (48 characters)
+   ```
+
+3. Open that address from a trusted network, enter the token and create the administrator
+   (`POST /api/setup`, [`security.md`](security.md)). Once the administrator exists the token disappears from the
+   console and from the disk, and the console says the setup is complete.
+
+There is **no password and no SSH key in the image**: root is locked, no account can sign in on the console, and the
+SSH server has no key to accept. Complete the setup promptly, and keep the VM on a network where only people you
+trust can reach port 8080 until you have put TLS in front of it ([`hardening.md`](hardening.md)): the console speaks
+plain HTTP.
+
+### A shell, a fixed address, your keys: cloud-init
+
+For anything beyond the console the appliance uses `cloud-init` with a **NoCloud** seed: a small disk (or the
+cloud-init drive of your hypervisor) labelled `cidata` that holds `user-data`, `meta-data` and, if you want a fixed
+address, `network-config`. With no seed, `cloud-init` stays out of the way. Example `user-data`:
+
+```yaml
+#cloud-config
+ssh_authorized_keys:
+  - ssh-ed25519 AAAA... you@example.com
+```
+
+The key goes to the user `debian` (passwordless `sudo`; SSH root login and password logins stay off). Every VM made
+from the image is called `seshat` until you set another name: `meta-data` is `instance-id: seshat-1` and, to name
+the VM, `local-hostname: seshat-east`. A static address goes in `network-config`:
+
+```yaml
+version: 2
+ethernets:
+  nic:
+    match: { name: "en*" }
+    addresses: [192.0.2.20/24]
+    routes: [{ to: 0.0.0.0/0, via: 192.0.2.1 }]
+    nameservers: { addresses: [192.0.2.53] }
+```
+
+Make the seed with `genisoimage -output seed.iso -volid cidata -joliet -rock user-data meta-data network-config`
+and attach it as a CD-ROM (or use the hypervisor's own cloud-init feature). The seed is read on the first boot of
+a VM; give a new `instance-id` to apply a changed one.
+
+**Your own setup token or settings.** `write_files` in `user-data` can write `/etc/seshat/seshat.env` before Seshat
+starts: the service waits for `cloud-init` to finish writing when a seed is present, and what `seshat.env` holds
+wins over everything the appliance generated.
+
+```yaml
+write_files:
+  - path: /etc/seshat/seshat.env
+    permissions: '0600'
+    content: |
+      SESHAT_SETUP_TOKEN=choose-a-random-token-of-at-least-32-characters
+```
+
+The console then says that the token you configured is in use (it does not print it), and the generated one is
+ignored and deleted once the administrator exists. Remove the line from `seshat.env` afterwards. (Writing the file
+replaces the shipped example; `/usr/share/doc/seshat/seshat.env.example` has it.)
+
+Everything in this guide that says `/etc/seshat/...` works as on any host with the package: edit
+`/etc/seshat/seshat.env`, then `systemctl restart seshat`.
+
+### Ports
+
+| Port | Use | Open it to |
+|---|---|---|
+| 8080/tcp | the console and API (HTTP) | your administrators, preferably through a TLS proxy |
+| 162/udp | SNMP traps | the devices that send them |
+| 514/udp, 514/tcp | syslog | the devices that send it |
+| 2055, 4739, 6343/udp | NetFlow, IPFIX, sFlow, only when enabled in `seshat.env` | your exporters |
+| 22/tcp | SSH, keys only | your administrators |
+
+The appliance has no host firewall; restrict these at the hypervisor or the network ([`hardening.md`](hardening.md),
+"Listener exposure and firewall rules").
+
+### Data, the disk and backups
+
+* Seshat's data (the database, destination queues, MIB uploads) is `/var/lib/seshat`, mode 0700, on the
+  root partition. The secret key is `/etc/seshat/secret.env`; the settings are `/etc/seshat/seshat.env`.
+* **Disk space.** Enlarge the virtual disk in the hypervisor and reboot: the root partition and file system grow
+  into the new space at boot, nothing else to do.
+* **A separate data disk** keeps the data when you replace the image. Add a second virtual disk, then, *before* you
+  create the administrator:
+
+  ```sh
+  systemctl stop seshat
+  mkfs.ext4 -L seshat-data /dev/sdb              # the new, empty disk (check its name with lsblk)
+  echo 'LABEL=seshat-data /var/lib/seshat ext4 defaults,noatime 0 2' >> /etc/fstab
+  mount /var/lib/seshat && chown seshat:seshat /var/lib/seshat && chmod 0700 /var/lib/seshat
+  systemctl start seshat
+  ```
+
+* **Backups** follow [`hardening.md`](hardening.md), section 9: the data directory (stop the service for a copy, or
+  take a hypervisor snapshot; with the guest agent the file system is frozen consistently) and `seshat.env`; the
+  **secret key separately**, and test a restore. A hypervisor snapshot or backup of the whole VM captures both, so
+  protect it like the live system.
+
+### Updating
+
+* **Seshat itself**: download the package of the newer release, check it against `SHA256SUMS`, and on the VM run
+  `apt install ./seshat_<version>-1_amd64.deb`. Settings, key and data are kept, the service restarts and the
+  migrations run (the same as "Upgrade" above). Take a backup first.
+* **Debian**: the VM is configured for Debian's package archives. `apt update && apt full-upgrade` brings security
+  updates, then reboot when the kernel changed (after a kernel upgrade the boot menu's second entry, "previous kernel", boots the one before; until then that entry has nothing to boot). Nothing
+  is installed or restarted automatically.
+* **Replacing the image**: deploy the new release's image next to the old one, stop `seshat` on both, copy
+  `/var/lib/seshat` and `/etc/seshat/secret.env` (and `seshat.env`) to the new VM (or attach the old VM's data disk),
+  fix ownership (`chown -R seshat:seshat /var/lib/seshat`), start `seshat`, then retire the old VM. With a separate data
+  disk this is: detach it, attach it to the new VM, mount it.
+
+### If something is wrong
+
+* Boot messages and the login prompt are on the VM console and, at 115200 baud, on the serial port. The GRUB menu
+  waits 3 seconds; edit the entry (`e`) to boot into a shell by adding `init=/bin/bash` when you have lost access:
+  whoever controls the hypervisor controls the VM, as with any VM.
+* `journalctl -u seshat` (the journal is kept across reboots), `systemctl status seshat`, `systemctl --failed`.
+* The console banner is written by `seshat-appliance-banner.service`; the one-time work of the first boot by
+  `seshat-appliance-firstboot.service`; the disk growth by `seshat-appliance-grow.service`.
+

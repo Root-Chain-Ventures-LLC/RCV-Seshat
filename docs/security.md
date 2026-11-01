@@ -121,8 +121,9 @@ Still never expose an instance that has not been set up: complete setup before o
 
 ## Metrics and API description
 
-`/metrics` and `/api/openapi.json` need a signed-in administrator or operator (session or API token).
-For Prometheus use a dedicated bearer token instead of an account:
+`/metrics` needs a signed-in administrator or operator (session or API token) and `/api/openapi.json` also admits a
+`viewer`. A `viewer` is refused on `/metrics` on purpose: the metrics name destinations, BGP neighbours and prefixes at
+a finer grain than the console shows. For Prometheus use a dedicated bearer token instead of an account:
 
 ```sh
 SESHAT_METRICS_TOKEN=$(openssl rand -hex 32)       # at least 32 characters
@@ -140,7 +141,7 @@ scrape_configs:
 The metrics token opens `/metrics` and the detail of `/api/ready` only; it is not an API credential.
 `GET /api/health` (`{"ok":true}`) and `GET /api/ready` stay open for load balancers and probes. Anonymous
 callers get only the verdict, `{"ready":true|false}` (and the status code); the per-check detail (listener
-addresses, output counts, `source_ip`) is returned to administrators, operators and the metrics token.
+addresses, output counts, `source_ip`) is returned to administrators, operators, viewers and the metrics token.
 
 ## API tokens
 
@@ -153,7 +154,7 @@ no credential can outlive the administrator behind it. Tokens that an earlier ve
 only while a live token of the parent's name does (a best-effort rule: names are not unique and the parent was
 not recorded), and tokens from before creators were recorded have no creator and are not tied to an account.
 
-A token's **role** decides which routes it opens (`admin`, `operator`, `user`), and its **scope** (sites and
+A token's **role** decides which routes it opens (`admin`, `operator`, `viewer`, `user`), and its **scope** (sites and
 tenants) decides which Device Tracker data it sees: an unscoped token sees none. Two roles exist for tokens only:
 `sync` (push-sync ingest) and `tracker:read` (lookup, export, the device list, ports, port history and poll-now,
 read-only; every other route is 403). Routes that merely require a signed-in caller (the account routes) refuse both.
@@ -188,6 +189,39 @@ the cookie, and are not affected (another `Authorization` scheme does not exempt
 cookie yet (curl, scripts). If you script the API with a session cookie, add `-H 'X-Requested-With: seshat'`.
 Single-sign-on sign-out is `POST /api/auth/oidc/logout` (the web UI does this); a `GET` only redirects to the
 login page.
+
+## Roles
+
+Four roles for accounts, highest first: **admin > operator > viewer > user**.
+
+| Role | Sees | Changes |
+|---|---|---|
+| `admin` | Everything, including users, API tokens, the audit log, storage and connector settings | Everything |
+| `operator` | Every console page and endpoint that is not admin-only: dashboard, inputs, packs, devices, routes, destinations, cluster, edges, inbox, Device Tracker (including its settings, sources and lists) | Operational data: adopt, merge and ignore devices, import CSV, mute inbox items, the tracker lists and per-device polling, poll-now, route dry-runs |
+| `viewer` | The same pages and endpoints as `operator`, for every site (a viewer account is not scoped), with secrets shown as names only (`secrets_set`), never values | **Nothing in the console.** Every state-changing request is `403 forbidden` (never an empty list), including the ones an operator may make. Like every account it can change its own password and end its own sessions |
+| `user` | Device Lookup and the account page only, for the sites and tenants it has been given (none when it has none) | Its own password and sessions |
+
+A `viewer` is for people who need to watch the system, not run it: a wall display, an auditor, a help desk. It differs
+from `operator` in three ways beyond the writes:
+
+* **Not the audit log, users or API tokens** (admin only, as for an operator), and **not `/metrics`** (operators and the
+  metrics token only; see [Metrics and API description](#metrics-and-api-description)).
+* **No actions.** Poll-now and the route dry-run are `POST`s that an operator uses as actions, and they are refused.
+  Account self-service is not a console write: a viewer can change its own password and sign out everywhere, exactly the
+  routes the `user` role has (`/api/account/password`, `/api/account/logout-everywhere`, sign-out). An API token has no
+  account behind it, so a token of any role is refused those two routes, a `viewer` token as a `user` token.
+* **Scope.** A viewer *session* sees every site, like an operator. A `viewer` API token keeps its site/tenant scope on the
+  Device Tracker routes, like an operator token (see API tokens below); an unscoped one reads the rest of the console but
+  sees no device data on those routes, and the token list shows a warning for it.
+* **Audited reads.** A viewer's lookups, exports and port-history reads are written to the audit log like anyone's, as
+  `tracker.lookup`, `tracker.export` and `tracker.port_history` under the viewer's email (`token:<name>` for a token).
+  Nothing else a viewer does is audited, because nothing else changes state.
+
+Single sign-on maps groups to roles with `SESHAT_OIDC_ADMIN_GROUPS`, `_OPERATOR_GROUPS`, `_VIEWER_GROUPS` and
+`_USER_GROUPS` (Settings > Sign-in has a field for each); a person in several groups gets the highest role, and
+`SESHAT_OIDC_DEFAULT_ROLE` (`user`, `operator`, `viewer` or `deny`) covers everyone else. Roles are recomputed at each
+sign-in. The same groups can drive the same three staff roles in every RCV app. The endpoint list per role is in
+`/api/openapi.json` (each summary names the roles it admits).
 
 ## Accounts and what they can see in Device Lookup
 

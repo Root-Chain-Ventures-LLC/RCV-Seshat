@@ -103,7 +103,7 @@ into the few node addresses. The chart therefore defaults to `Local` and tells y
 `intake.sourceIPCheck.snatCIDRs`, which should list your node subnets and the balancer's SNAT pool).
 Every received datagram or accepted connection is compared against those ranges (a few prefix
 compares and one atomic add, no I/O). If any matches, `GET /api/ready` reports
-`"source_ip": "snat_detected"` in the detailed answer (the per-check detail is for an administrator, an operator or the metrics token; anonymous callers get only `ready` and the status code) (the pod stays ready: Seshat accepts everything, and taking every
+`"source_ip": "snat_detected"` in the detailed answer (the per-check detail is for an administrator, an operator, a viewer or the metrics token; anonymous callers get only `ready` and the status code) (the pod stays ready: Seshat accepts everything, and taking every
 pod out of the Service would also take the UI away), the log shows
 `SOURCE ADDRESS REWRITING DETECTED` once a minute while it continues, and the Dashboard shows a
 red "Source addresses" tile. Alert on the check value if you scrape `/api/ready` with the metrics token.

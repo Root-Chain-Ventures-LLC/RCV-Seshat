@@ -21,11 +21,11 @@ The roles `all`, `collector` and `edge` start the listeners; `console` does not.
 
 The operator-editable part (allow-list, rate limits, connection limits, idle timeout, time zone,
 client-certificate policy and the listen addresses) lives in **Inputs, Syslog input** and in
-`GET/PUT /api/inputs/syslog` (admin to change, operator to read). Everything applies immediately
+`GET/PUT /api/inputs/syslog` (admin to change, operator or viewer to read). Everything applies immediately
 except the three listen addresses, which apply at the next start (`restart_required` is shown
 meanwhile). Environment values are the defaults until the settings are saved once.
 
-`/api/ready` reports each enabled listener to an administrator, an operator or the metrics token (anonymous callers get only the verdict); it answers 503 while one is down (for example the TLS
+`/api/ready` reports each enabled listener to an administrator, an operator, a viewer or the metrics token (anonymous callers get only the verdict); it answers 503 while one is down (for example the TLS
 listener without a readable certificate; the bind is retried every 10 s).
 
 ## Framing
