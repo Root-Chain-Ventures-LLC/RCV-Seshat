@@ -15,10 +15,17 @@ Two applications ship from here:
   the collectors' network.
 
 An **edge collector** (`seshat-edge`) forwards a remote site's traps, syslog and flows to the main server over
-an outbound connection.
+an outbound connection. When an administrator turns it on, an edge can also carry an authorised application's
+TCP session to an allow-listed host on its network, or run on-demand SNMP reads there, without the remote
+site accepting any inbound connection.
 
-Seshat accepts data from any sender, never changes anything on a device (no SNMP SET, no CLI writes) and keeps
-credentials sealed under one key you hold.
+**Integrations**: other applications connect as registered integration clients whose tokens carry only the
+capabilities they need (Device Tracker reads, bulk reads, event subscriptions with replay, edge relay, edge SNMP
+reads), against versioned contracts.
+
+Seshat accepts data from any sender, never changes anything on a device itself (no SNMP SET, no CLI writes) and
+keeps credentials sealed under one key you hold. A relayed session belongs to the application that opened it:
+Seshat carries its encrypted bytes and can restrict where it goes, not what it does.
 
 ## License
 
@@ -160,8 +167,8 @@ Read [`docs/hardening.md`](docs/hardening.md), "Upgrading", before a version jum
 ## Documentation
 
 [`docs/README.md`](docs/README.md) indexes everything: deploying safely, the inputs (SNMP, syslog, flows,
-streaming telemetry), routing and outputs, the device knowledge base, the Device Tracker, edge collectors, high
-availability, storage, and the event schema. Index templates, a Logstash input and PostgreSQL roles for the
+streaming telemetry), routing and outputs, the device knowledge base, the Device Tracker, edge collectors
+(including the relay and SNMP reads), integrations, high availability, storage, and the event schema. Index templates, a Logstash input and PostgreSQL roles for the
 output side are in [`deploy/`](deploy).
 
 ## Reporting problems

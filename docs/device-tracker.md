@@ -341,6 +341,7 @@ setting is on (high volume). The fields are in [`schema/fields.md`](schema/field
 |---|---|---|---|
 | `GET /api/tracker/lookup?q=` | yes | yes | yes |
 | `GET /api/tracker/export.csv?q=` | yes (its own query) | yes | yes |
+| `POST /api/tracker/lookup/batch`, `GET /api/tracker/bindings` ([bulk reads](#bulk-reads-for-integrations)) | 403 | yes | yes |
 | every other `GET` under `/api/tracker/` (status, settings, devices, ports, port history, sources, lists, OUI) | 403 | yes | yes |
 | every `PUT`, `POST`, `PATCH` and `DELETE` under `/api/tracker/` (including poll-now) | 403 | 403 | yes |
 
@@ -374,8 +375,18 @@ SQLite, which has no schemas, the same views exist as `tracker_public_<view>`.
   operator; Seshat never polls an unknown device. Each profile only ever polls its allowed networks
   (when none are listed, any device an operator enabled for tracking; never an address known only from
   traffic) and never loopback, link-local or multicast addresses ([details](device-kb.md#where-polling-is-allowed-to-go)).
+- The on-demand [SNMP reads through an edge](edge.md#snmp-reads) run on the same read-only `Session` and the same
+  credential helper, take the same never-poll and allowed-networks checks on the edge, and are covered by the same
+  source scan (it reads their package too).
 - CLI collectors are not implemented: where SNMP is not enough (for example some NX-OS tables), the
   binding says so and that data is simply not collected.
+- **What the guarantee covers.** It is about what Seshat itself sends to network devices: its collectors, its
+  poller and its API. It does not cover a session a client runs through an edge's
+  [TCP relay](edge.md#relay). That is a separate capability, off on every edge until an administrator turns
+  it on and lists the hosts it may reach. Seshat carries the client's bytes and originates no protocol
+  traffic through it, so it cannot see or restrict what such a session does; a `read` intent that the client
+  declares is recorded and checked against the edge's mode, not enforced inside the stream. An edge whose
+  relay is off or in mode `read` refuses sessions that declare write intent.
 
 
 ## Limits
@@ -406,7 +417,7 @@ SQLite, which has no schemas, the same views exist as `tracker_public_<view>`.
 
 ## Scope on the lookup and the device routes
 
-`GET /api/tracker/lookup`, the CSV export, the device list, a device's ports, a port's history and poll-now all
+`GET /api/tracker/lookup`, the batch lookup, the prefix bindings, the CSV export, the device list, a device's ports, a port's history and poll-now all
 answer only what the caller's scope allows, by the same test (a device is in scope when its site or its tenant is
 listed). A device outside the scope answers `404 not_found`, the same as an id that does not exist, so a scoped
 token cannot tell other sites' devices from missing ones; the device list leaves them out, and for a scoped caller
@@ -429,7 +440,31 @@ Because the scope is the lookup's, **an API token with no scope sees nothing** o
 its role (the token list marks an unscoped `tracker:read` token with a warning). Give a token the sites and tenants
 it needs, or `*` for all.
 
+### Bulk reads for integrations
+
+An integration that checks many devices at once (a DHCP manager comparing leases with what the network sees, a change tool
+verifying a cutover) should not loop over the single lookup. Two calls serve it, both inside the caller's site/tenant scope and
+both in the contract of [`schema/tracker.md`](schema/tracker.md) (field-level detail and examples there):
+
+- `POST /api/tracker/lookup/batch` with `{"queries": [...]}` (up to 500 MACs, IPs, hostnames or users) returns one
+  single-lookup answer per query, unchanged, in request order. A query with nothing visible to the caller is counted in
+  `warnings`. One audit event (`tracker.lookup.batch`) records the count and a SHA-256 of the sorted queries, not the queries.
+- `GET /api/tracker/bindings?site=<site>&prefix=<cidr>` returns the current ARP / ND / DHCP bindings of one site inside an
+  IPv4 or IPv6 prefix, paged with an opaque cursor (default 500 rows, at most 5000; a short page with a cursor means "continue", only a null
+  cursor is the end). The site must be inside the caller's scope (`403 out_of_scope`, also audited, as `denied`). One audit
+  event (`tracker.bindings`) per page. A batch is bounded too: history per item is the `history_limit` setting, at most
+  2000 devices in all, body up to 256 KiB.
+
+Both are open to admin, operator, viewer, `tracker:read` tokens and integration clients holding `tracker.bulk` (rate limited per call: a batch is one admit), and closed to the `user` role: they return many devices
+per call, which the lookup page never needs. The DHCP sighting fields (`lease_expires`, `circuit_id`, `remote_id`,
+`relay_agent`, `location.circuit`) are part of the answer. The audit action filter on the Audit page is exact, so enter
+`tracker.lookup.batch` or `tracker.bindings` to see these events.
+
 ### Read-only integration tokens (`tracker:read`)
+
+> New integrations should be registered as an **integration client** holding the capabilities `tracker.read` (and
+> `tracker.poll` for poll-now, `tracker.bulk` for the batch lookup and prefix bindings): see [`integrations/README.md`](integrations/README.md). A `tracker:read` token is
+> exactly a client with `tracker.read`, `tracker.poll` and `tracker.bulk` and keeps working unchanged; what follows describes it.
 
 An integration that only needs to read the tracker (for example a change-planning tool that checks switches before a
 cutover) should not hold an operator token, which can also change device settings, watch lists and approved lists.
@@ -444,6 +479,7 @@ It opens exactly these routes, within its site/tenant scope:
 | Route | |
 |---|---|
 | `GET /api/tracker/lookup`, `GET /api/tracker/export.csv` | lookup and CSV export |
+| `POST /api/tracker/lookup/batch`, `GET /api/tracker/bindings` | batch lookup and prefix bindings ([bulk reads](#bulk-reads-for-integrations)) |
 | `GET /api/tracker/devices` | the device list |
 | `GET /api/tracker/devices/{id}/ports` | a device's ports from the last full poll |
 | `GET /api/tracker/ports/{device}/{ifindex}/history` | who has been on a port |

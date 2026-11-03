@@ -8,7 +8,7 @@ with one shared shape:
 | Mode | Mechanism | Contract surface |
 |---|---|---|
 | A. Push sync (default) | Seshat pushes batches to the portal over HTTPS | [Push-sync envelope](#push-sync-envelope) |
-| B. Lookup API | Portal calls Seshat's read-only `/api/tracker/*` | [Lookup response](#lookup-response) |
+| B. Lookup API | Portal calls Seshat's read-only `/api/tracker/*` | [Lookup response](#lookup-response), [batch lookup](#batch-lookup), [prefix bindings](#prefix-bindings) |
 | C. Direct database | Portal reads a read-only Postgres role | [`tracker_public` views](#tracker_public-views) |
 | D. Shared Postgres, same cluster | Same as C, in the same database | `tracker_public` views |
 
@@ -201,6 +201,7 @@ response. Requires an authenticated session or API token. Every call is audited 
 | `l3.ips[].gateway` | string | no | |
 | `l3.ips[].lease_expires` | timestamp | no | DHCP lease expiry when known |
 | `l3.ips[].circuit_id`, `.remote_id` | string | no | DHCP option 82 sub-options (additive) |
+| `l3.ips[].relay_agent` | string | no | The DHCP relay agent address (giaddr) that forwarded the exchange, as reported by the sighting (additive). `location.circuit.device` is the device the tracker resolved the relay to; this is the address itself |
 | `l3.ips[].since` | timestamp | yes | Start of the current interval |
 | `l3.ips[].observed_at` etc. | provenance set | yes | `observed_at` is the "last confirmed" time |
 | `history[]` | array | yes (may be empty) | Intervals, all kinds mixed, newest `from` first |
@@ -221,6 +222,110 @@ not guess), `query`, `redactions` (paths hidden by policy, e.g.
 `results[i].`). The portal adds the optional keys `notices` (for example `no_scope`) and `portal`
 (`{ mode, state, as_of }`: where the answer came from); Seshat never sets them and consumers ignore keys
 they do not know.
+
+## Batch lookup
+
+`POST /api/tracker/lookup/batch` answers many lookups in one call (capability `tracker.bulk`). Body:
+
+```json
+{ "queries": ["02:00:5e:20:00:07", "192.0.2.57", "laptop-17.example.com", "alice@example.com"] }
+```
+
+- `queries` holds 1 to **500** strings, each a MAC, IP address, hostname or user, exactly as for the
+  single lookup. More than 500 answers `400 limit_exceeded`; a query that is empty or longer than 255
+  characters answers `400 invalid_query` naming its index (`queries[3]`) and nothing runs. The body
+  may be up to 256 KiB (500 queries of 255 characters fit; the general 64 KiB cap does not apply here);
+  a larger body is `413 body_too_large`.
+- The work of a batch is bounded. The history of every item is cut to the tracker's `history_limit`
+  setting (default 100) and `history_truncated` says when it was; the `limit` and `offset` query
+  parameters of the single lookup are ignored by the batch. One batch returns at most **2000 devices**
+  in total (a single query can match up to 50, and a repeated query counts again): the call is refused
+  with `400 limit_exceeded` as soon as the count is passed, and nothing is returned.
+- The response is `{ "contract": { "name": "seshat.tracker.lookup", "version": 1 }, "results": [...], "warnings": [...] }`.
+  **Each item of `results` is exactly the response of `GET /api/tracker/lookup?q=<query>`**: the
+  same object, the same fields (`generated_at`, `data_as_of`, `stale_after_seconds`, `query`,
+  `redactions`, `results`), produced by the same code, so the DHCP fields (`l3.ips[].lease_expires`,
+  `circuit_id`, `remote_id`, `relay_agent`, `location.circuit`) and everything added to the lookup
+  later reach a batch unchanged. Items come in the order of the request, one per query (a repeated
+  query is answered once and repeated); `item.query.raw` is the query as sent. All items share one
+  `generated_at` and `data_as_of`. `redactions` paths are relative to their item
+  (`results[0].identity.user`).
+- Scope is the single lookup's: facts outside the caller's site and tenant scope are left out. A
+  query with nothing visible to the caller is an item with `"results": []`, and `warnings` counts them:
+  `"no_results: 2 of 40 queries matched no device visible to this caller (unknown, or outside its site and tenant scope)"`.
+  The warning does not say which of the two it was, so a scoped token cannot learn what exists
+  elsewhere. `warnings` is always present (an empty array when there is nothing to say).
+- **Audit**: one event per batch, `tracker.lookup.batch`, whatever its size. Its detail holds `count`,
+  `results` (the number of devices returned) and `queries_sha256`: the SHA-256 (hex) of the trimmed
+  queries, sorted and joined with a newline. The queries themselves are not kept. The Audit page
+  shows it when its action filter is `tracker.lookup.batch`.
+- Roles: admin, operator, viewer, or a `tracker:read` token. Not the `user` role (403): bulk data is
+  not a lookup page feature.
+
+## Prefix bindings
+
+`GET /api/tracker/bindings?site=<site>&prefix=<cidr>[&vrf=<vrf>][&cursor=<cursor>][&limit=<n>]`
+lists the **current** L3 bindings (ARP, ND and DHCP) inside a prefix for one site (capability
+`tracker.bulk`). It serves "what the network sees" next to a lease table without enumerating addresses.
+Contract name `seshat.tracker.bindings`, **version 1**, with the conventions above.
+
+| Parameter | Notes |
+|---|---|
+| `site` | Required, exactly one. Must be inside the caller's scope, else `403 out_of_scope` (a site not listed in a site-limited token; a token with no scope has none). A tenant-limited token reaches the site, and sees only the rows of its tenants |
+| `prefix` | Required. An IPv4 or IPv6 CIDR (`192.0.2.0/24`, `2001:db8::/32`); host bits are cleared (`192.0.2.77/24` is `192.0.2.0/24`). Anything else is `400 invalid_prefix` |
+| `vrf` | Optional. Only bindings of this VRF; without it every VRF of the site is listed |
+| `limit` | Default 500, at most 5000 (`400 limit_exceeded` above). Below 1 or not a number is `400 invalid_request` |
+| `cursor` | Optional. The `next_cursor` of the previous page. It is opaque and not signed: it only carries a resume position, and it is tied to its site, prefix and VRF (`400 invalid_cursor` otherwise). Every row of a page is still filtered by the caller's scope, so a forged cursor reveals nothing |
+
+```json
+{
+  "contract": { "name": "seshat.tracker.bindings", "version": 1 },
+  "generated_at": "2026-10-12T14:03:07Z",
+  "data_as_of": "2026-10-12T14:03:02Z",
+  "stale_after_seconds": 1800,
+  "site": "example-site-a",
+  "prefix": "192.0.2.0/24",
+  "bindings": [
+    {
+      "mac": "02:00:5e:20:00:07",
+      "ip": "192.0.2.57",
+      "vrf": "default",
+      "gateway": "192.0.2.1",
+      "lease_expires": "2026-10-12T16:00:00Z",
+      "since": "2026-10-12T09:00:00Z",
+      "circuit_id": "circuit-17",
+      "remote_id": "remote-17",
+      "relay_agent": "192.0.2.2",
+      "observed_at": "2026-10-12T14:02:40Z",
+      "age_seconds": 27,
+      "source": "dhcp",
+      "confidence": 0.9,
+      "stale": false
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+- A binding is the `l3.ips[]` entry of the lookup (same names, same provenance set, `observed_at` is
+  the last confirmation) plus `mac`. `gateway`, `lease_expires`, `circuit_id`, `remote_id` and
+  `relay_agent` are omitted when unknown.
+- Only current bindings are listed (open intervals); history stays in the lookup. Rows are ordered
+  by interval id, which is stable while the table changes, not by address; sort on the client.
+- **Paging: a short page with a cursor means "continue".** A request reads at most
+  `max(5 x limit, 2500)` rows of the site. When that budget runs out before the page is full (a sparse
+  prefix, or a tenant-limited caller on a site that holds mostly other tenants' rows) the page holds
+  fewer rows than `limit`, possibly none, and `next_cursor` is set. Only `"next_cursor": null` means the
+  end. A page that ends exactly at the end of the data has no empty successor.
+- IP addresses are stored in their canonical text (an IPv4-mapped IPv6 address such as
+  `::ffff:192.0.2.5` is stored and matched as `192.0.2.5`). An address with a zone (`fe80::1%eth0`)
+  is never inside a prefix, so it is not listed.
+- Rows outside the caller's scope are left out, as in the lookup. An empty page for a site the caller
+  may see is `200` with `"bindings": []`.
+- **Audit**: one event per page request, `tracker.bindings` (`site`, `prefix`, `vrf`, `results`,
+  `more`, `outcome`: `ok`; never the cursor). A request refused with `403 out_of_scope` is audited too, with
+  `outcome: denied` and no row data. The other refusals (a bad prefix, a bad cursor) are not.
+- Roles as for the batch lookup: admin, operator, viewer or a `tracker:read` token, not `user`.
 
 ## `tracker_public` views
 

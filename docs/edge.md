@@ -54,6 +54,7 @@ server: the edge pulls it.
 | Queue | The same disk queue as every destination (`$SESHAT_DATA_DIR/queue/upstream`, 1 GiB by default, spill). Nothing is dropped because the server is away. |
 | Rate limit | An edge-wide token bucket (events per second), set on the server; what it drops is counted. |
 | Packs | The server's pack directories (tar.gz, ETag). A change restarts the edge's pipeline. Until the first sync it uses the packs shipped with the image. |
+| Relay | Off by default. When an administrator turns it on and lists the hosts it may reach, the edge opens TCP connections to them for authorised clients ([Relay](#relay)). It runs on its own connection to the server and goroutines, never on the event path. |
 | State | Only `edge.json`, the queue, the packs and the KB snapshot. No database file is ever written; the components that expect a store get a private in-memory one. |
 
 Changing the configuration, the packs or the listen addresses restarts the edge's pipeline inside the
@@ -152,6 +153,26 @@ TLS key, for instance) in plain text: the edge has no stable key of its own to s
 no secrets at rest" is not true of it. Protect the data directory like a key store (dedicated user, disk
 encryption), and prefer local outputs that need no secret. The queue directory is private as well.
 
+Three more files live next to it, all mode 0600:
+
+- `snmp-seal.key`: the edge's X25519 key for sealed SNMP credentials ([SNMP reads](#snmp-reads)), made at first start
+  (written and synced to disk before it is used). The edge refuses a key file that is empty, damaged or readable
+  by group or others, and does not replace it: only the SNMP reads become unavailable (the status page and
+  `seshat_edge_snmp_available 0` say why); traps, syslog, flows and the relay keep running. Fix the file or
+  delete it to make a new key.
+- `snmp-used.log`: the ids and expiry of the sealed credentials already used (no credential, no key), so that a restart
+  does not reopen the replay window of a blob that leaked; at most 100,000 live entries, beyond which sealed reads are
+  refused with `limit_exceeded` until some expire (a blob lives five minutes at most).
+- `snmp-profiles.enc`: the SNMP credentials of the site's profiles, only on an edge that has the SNMP reads switched on.
+  They are **not** in `edge.json`. The file is encrypted with XChaCha20-Poly1305 under a key derived (HKDF-SHA256)
+  from `snmp-seal.key`, so the credentials are not readable in a copy of `edge.json`, a backup of the one file, or
+  a support bundle. This is encryption at rest in the limited sense: the key sits in the same directory, so
+  anyone who can read the whole data directory can read the credentials, exactly as they can already take the
+  edge's private key. Protect the directory as above. The file is replaced whole at every configuration change,
+  so a profile that is deleted, disabled or cleared on the server is gone from the edge at its next sync, and the file is
+  removed when the reads are switched off.
+- `kb-snapshot.json.gz` and `packs/` (not secret).
+
 ## The edge CA
 
 Generated at first use (ECDSA P-256, ten years), kept in the server's settings with its key sealed under
@@ -186,6 +207,8 @@ Every write is in the audit log (the token never is). The enrolment token is ret
 | `SESHAT_EDGE_SERVER`, `SESHAT_EDGE_ENROL_TOKEN` (or `SESHAT_EDGE_ENROL_TOKEN_FILE`) | Enrol on first start (ignored once enrolled). |
 | `SESHAT_EDGE_CA_FILE` | Extra trust anchor for the server's web certificate. |
 | `SESHAT_EDGE_INSECURE_SKIP_VERIFY` | Evaluation only. |
+| `SESHAT_EDGE_RELAY_CEILING`, `SESHAT_EDGE_RELAY_CEILING_FILE`, `SESHAT_EDGE_RELAY_MAX_MODE` | The edge's own bound on the relay the server may configure ([Relay](#the-edge-local-ceiling)). |
+| `SESHAT_EDGE_SNMP_CEILING`, `SESHAT_EDGE_SNMP_CEILING_FILE` | The edge's own bound on where SNMP reads may go ([SNMP reads](#the-edge-local-ceiling-for-snmp-reads)). |
 | `SESHAT_SNMP_TRAP_LISTEN`, `SESHAT_SYSLOG_UDP_LISTEN`, `SESHAT_SYSLOG_TCP_LISTEN`, `SESHAT_FLOW_*_LISTEN` | Local listen addresses, used when the server's configuration leaves them empty. |
 | `SESHAT_PACKS_DIR` | Packs shipped with the install; the server's packs replace them. |
 | `SESHAT_SECRET_KEY` | Not needed. |
@@ -202,6 +225,406 @@ families and process metrics); on the server `seshat_edge_up`, `_last_seen_times
 `degraded` (online but its link is down or the queue is more than a minute old), `offline` (no heartbeat for
 90 s). A configuration saved on the server shows `config pending` until the edge reports it.
 
+## Relay
+
+An edge can carry an authorised client's TCP session to a host on the edge's own network, without the
+remote site accepting any inbound connection. The client asks the server, the server asks the edge over
+the edge's existing outbound connection, and the edge opens the TCP connection locally. The edge never
+listens.
+
+```
+client --HTTP/1.1 Upgrade--> [ server ] <==control request + one data request per session== [ edge ] --TCP--> target
+          POST /api/edges/ID/relay                    (both opened by the edge, outbound)
+```
+
+**It is off on every edge until an administrator turns it on**, and what it may reach is a list the
+administrator writes. The relay adds no confidentiality: the client runs TLS, SSH or WinRM inside the
+stream, and Seshat sees only the ciphertext. A target that speaks a plain-text protocol is plain text on
+the server and on the way to it; that is the client's risk to accept.
+
+### Turning it on
+
+Edges page, drawer, **Relay** (or `POST /api/edges/{id}/config` with a `relay` block):
+
+```json
+{ "relay": {
+    "mode": "read+write",
+    "allow": ["192.0.2.10:443", "198.51.100.0/24:8000", "[2001:db8::/48]:22", "dhcp.example.com@192.0.2.0/24:8000"],
+    "limits": { "max_streams": 4, "max_bytes": 1073741824, "idle_secs": 300, "max_secs": 3600, "dial_secs": 10, "rate_kbps": 0 } } }
+```
+
+| Field | Meaning |
+|---|---|
+| `mode` | `off` (the default), `read` (accepts sessions that declare read intent only) or `read+write`. |
+| `allow` | `address:port`, `cidr:port`, or `name@cidr:port` (a host name **pinned to the network its addresses must be in**); an IPv6 address or network goes in brackets. A bare `name:port` is refused: a name alone would let whatever DNS answers decide where the edge connects. **Empty list = relay disabled**, whatever the mode. The client can never add to it. The edge's own address is not excluded: a network that covers it (or loopback) lets a session reach the edge box's own services. The Edges page warns about entries broader than a /8 (IPv6: /16), entries covering loopback and the default status-page port. |
+| `limits.max_streams` | Concurrent sessions on this edge (default 4, at most 64). |
+| `limits.max_bytes` | Bytes in both directions together, per session (default 1 GiB). |
+| `limits.idle_secs`, `max_secs` | A session with no traffic for `idle_secs` (default 300), or older than `max_secs` (default 3600), is closed. |
+| `limits.dial_secs` | How long the edge waits for the TCP connection to the target (default 10). |
+| `limits.rate_kbps` | Optional cap on all relay traffic of the edge together, in kilobits per second, so a busy session cannot crowd the telemetry off a thin uplink. 0 = no cap. |
+
+The edge pulls the section with the rest of its configuration and applies it at once, without restarting
+its pipeline. Sessions the new section no longer allows are closed.
+
+### What the edge checks (the check that counts)
+
+For every request the edge itself checks, in this order, and refuses with the code in brackets:
+
+1. relay on and the allow-list not empty (`relay_disabled`);
+2. the declared **intent** against the mode: a `write` session needs `read+write` (`write_not_allowed`);
+3. the number of open sessions (`limit_exceeded`);
+4. the **target**: an address must match an `address:port` or `cidr:port` entry. A name is resolved **by
+   the edge**, and every address it resolves to must be allowed: by an address or network entry, or by an
+   entry pinned to that name (`name@cidr:port`) whose network the address falls in. An answer outside the
+   allowed networks refuses the whole name, so a poisoned or hijacked DNS answer, even one inside the same LAN
+   but outside the pin, gets nothing. The edge connects to the addresses it checked, never to the name again,
+   so a name that changes its answer between the check and the connection (DNS rebinding) gets nothing
+   (`target_not_allowed`). The refusal tells the client only that the policy refused; the addresses involved
+   are in the edge's own log;
+5. the connection itself (`dial_failed`, with class `refused`, `timeout` or `unreachable`).
+
+Policy changes apply to sessions already open: one whose rule is no longer in the configuration (including a
+pinned name whose entry changed) is closed with reason `policy_revoked`, and a request being opened while the
+configuration changes is checked against the new one.
+
+The server makes the same mode and allow-list checks first, as a second line. Where the server cannot
+judge (a name, which only the site's resolver can answer) it leaves the decision to the edge.
+
+### API for clients
+
+`POST /api/edges/{id}/relay` with `{"target": "host:port", "intent": "read" | "write"}`, an
+token of an administrator, or of an [integration client](integrations/README.md) that holds the `edge.relay.tcp` capability and whose scope names the edge (`out_of_scope` otherwise; the client's rate limit answers `429 limit_exceeded`), and the headers `Connection: Upgrade` and `Upgrade: seshat-relay/1`. HTTP/1.1
+only. On success the server answers `101 Switching Protocols` and the connection then carries the raw
+bytes of the session both ways until either side closes it; there is no half-close. Anything else is an
+ordinary JSON error `{"error":{"code","message"}}` before the upgrade:
+
+| Code | Status | Meaning |
+|---|---|---|
+| `edge_offline` | 503 | The edge has no control connection to this server (it is down, or connected to a node that could not be reached). |
+| `relay_disabled` | 403 | Mode `off` or an empty allow-list. |
+| `target_not_allowed` | 403 | The target (or an address it resolves to) is not in the allow-list. |
+| `write_not_allowed` | 403 | The session declared write intent and the edge's mode is `read`. |
+| `dial_failed` | 502 | The edge could not connect; `error.fields.class` is `refused`, `timeout` or `unreachable`. |
+| `limit_exceeded` | 429 | The edge is already relaying its maximum number of sessions. |
+| `relay_timeout` | 504 | The edge did not answer in time. |
+| `capability_missing`, `out_of_scope`, `limit_exceeded` (429, `Retry-After`) | 403, 403, 429 | An integration client without the capability, for an edge outside its scope, or over its rate limit. |
+| `upgrade_required` | 426 | The request was not an HTTP/1.1 Upgrade. |
+| `validation_failed` | 400 | Missing or malformed `target` or `intent`. |
+
+Every attempt is audited (`edge.relay`), refusals included (`out_of_scope`, `upgrade_required`,
+`validation_failed`, the relay codes): a refusal is one record; a session is a `start` record when it opens and an
+`end` record when it closes, sharing one `session` id. A record names who asked (the account, or the
+integration client and its token id), the edge, the target (at most 255 characters), the declared intent, start
+and end, bytes in each direction and the outcome (`target_closed`, `server_closed`, `client_closed`,
+`idle_timeout`, `max_duration`, `max_bytes`, `policy_revoked`, `edge_shutdown`, `edge_dropped`, `error`, or
+`refused` with the code); a client that disconnects while the edge is still opening the relay is
+`client_closed`. The payload is never logged.
+
+An integration client may hold at most 2 relay sessions open at once unless its limits set another number
+(`"limits": {"edge.relay.tcp": {"concurrent": 4}}`); beyond it, `429 limit_exceeded`.
+
+
+### The edge-local ceiling
+
+The allow-list comes from the server, so by itself it protects against a stolen client token but not against a
+compromised server. An edge's own operator can bound what the server may ever allow, in the edge's environment
+(not in anything the server sends):
+
+| Variable | Meaning |
+|---|---|
+| `SESHAT_EDGE_RELAY_CEILING` | Comma-separated `address:port`, `cidr:port` or `name@cidr:port` entries (or `none`): the most the pushed allow-list may contain. |
+| `SESHAT_EDGE_RELAY_CEILING_FILE` | The same, one entry per line (`#` comments), read at start. |
+| `SESHAT_EDGE_RELAY_MAX_MODE` | `off`, `read` or `read+write`: the highest mode the server may set. |
+
+The effective policy is the pushed one **narrowed** by the ceiling: the mode is the lower of the two, and each
+pushed entry is cut down to what a ceiling entry also covers (a pinned name only by a plain ceiling entry or one
+pinned to the same name); what is left of nothing is dropped. The server can never add to it. With no ceiling
+variable set, the relay follows the pushed configuration alone, the edge logs a warning when it is enabled that way
+and the status page says so. A ceiling that cannot be read keeps the relay off. The status page and `/api/status`
+show the effective policy, what the server pushed and whether a ceiling is set.
+
+### What Seshat cannot see or enforce
+
+- **Intent is declared by the client.** `read` and `write` are labels the caller attaches to a session.
+  Seshat records them, and an edge in mode `read` refuses sessions that declare `write`, but it cannot see
+  inside the stream to know whether a `read` session writes. The only network-level control it has is the
+  port in the allow-list.
+- **Seshat's own read-only guarantee is unchanged** (Device Tracker, "The read-only guarantee"). It covers
+  what Seshat itself sends to devices. A relayed session is a separate capability: Seshat originates no
+  protocol traffic through it and cannot restrict what the client does inside it.
+- The server and the edge see ciphertext when the client uses TLS or SSH, and plain bytes when it does not.
+
+### Threats and what limits them
+
+| Threat | What limits it |
+|---|---|
+| A stolen client token | The allow-list is fixed by an administrator on the server and enforced on the edge: a token opens only the listed targets, only while the mode allows its intent, within the session, byte, time and rate limits, and every use is audited. The token cannot change any of that. |
+| A compromised server | **Without an edge-local ceiling the edge cannot defend against a compromised server**: the server distributes both the allow-list and the sessions, so whoever controls it can allow any target the edge can reach and open sessions to it. Set a ceiling on every edge that has the relay enabled (below): the pushed configuration can then only narrow what the edge's own operator allowed. |
+| DNS rebinding and poisoning | Names are resolved at the edge, only into the network they are pinned to, and the checked addresses are the ones dialled. |
+| Starving telemetry | Relay traffic uses its own connection to the server, its own goroutines and fixed-size buffers on the edge and never the event queue. Back-pressure goes to the client (a slow reader slows the sender, nothing accumulates), sessions and bytes are capped, and `rate_kbps` can cap the edge's relay bandwidth. |
+| A client that never ends | Idle and maximum-duration limits close the session on the edge and on the server. |
+
+### How it works
+
+The edge keeps one long-lived request, `POST /api/edge/v1/control`, open on a second connection of its
+own; the server streams newline-delimited JSON requests down its response, with a keepalive. A relay
+request carries the target and the declared intent. When the edge accepts it, it dials the target and
+opens two one-way requests: `POST /api/edge/v1/relay/{id}/up`, whose body carries the bytes from the
+target to the server, and `POST /api/edge/v1/relay/{id}/down`, whose response carries the bytes from the
+server to the target. The session exists when the server has attached both. A refusal or a failure is
+reported on the control channel instead. When the edge ends a session it first tells the server why
+(`POST .../relay/{id}/end`), so the server's record names the real reason.
+
+- Two one-way requests instead of one request carrying both directions: a stream that carries data in both
+  directions can deadlock inside an HTTP/2 implementation when one direction stalls while the other waits for
+  flow-control credit that is queued behind the stalled data. One-way streams cannot. It also means no proxy
+  has to stream a request and its response at the same time.
+- The dedicated edge listener (`SESHAT_EDGE_LISTEN`) speaks HTTP/2 and HTTP/1.1. HTTP/2 multiplexes the
+  sessions of an edge on one connection and gives each stream its own flow control; over HTTP/1.1 each leg
+  has a connection of its own.
+- The edge uses a connection of its own for the control channel and the relay, separate from the one that
+  carries events and heartbeats.
+- Through a TLS-terminating proxy the proxy must stream request and response bodies without buffering them
+  (HTTP/2 end to end, or HTTP/1.1 with request buffering off). If it buffers the control channel's streamed
+  response, the edge notices (no hello within ten seconds) and falls back to long-polling the control
+  channel (never faster than once a second); a relay session still needs the streaming data path.
+- Control replies, end notices and the control channel use a connection of their own, separate from the relay
+  legs, and the servers advertise large HTTP/2 flow-control windows: a client that stops reading its session
+  fills its own stream window and nothing else, so other sessions, the answers the server is waiting for and the
+  telemetry carry on.
+- An edge handles at most 64 relay requests at once whatever the session limit; a panic in a request or session
+  is contained to it (the session ends with reason `error`).
+- The same channel carries other kinds of request from the server to the edge; it is not specific to TCP.
+  An edge that does not know a kind answers `unsupported_kind`.
+
+With several server nodes the node that receives the client's request finds the node that holds the edge's
+control connection and passes the request to it; see [High availability](ha.md#the-edge-relay-across-nodes).
+If no node holds the edge's connection the client gets `edge_offline`.
+
+### Metrics and status
+
+On the edge (`/metrics` and the status page): `seshat_edge_relay_enabled`, `_active`, `_sessions_total`,
+`_refused_total{reason}`, `_bytes_total{direction="to_server|to_target"}`, `_closed_total{reason}`. On the
+server: `seshat_edge_relay_server_active`, `_sessions_total`, `_refused_total{reason}`, `_closed_total{outcome}`,
+`_bytes_total{direction}`. The Edges page shows whether an edge's control connection is up and how many
+sessions are open.
+
+## SNMP reads
+
+An authorised client can run **on-demand SNMP reads on a device at the edge's site, through the edge**: get,
+getnext, getbulk and walk, for the apps that need the optics levels, error counters or a forwarding table of one
+switch right now, at a rate a cutover window needs and a scheduled poller does not give. The edge sends the SNMP
+from its own network, with the site's own credentials, so the server needs no route to the device and a
+community never crosses the relay in clear.
+
+It is **off on every edge** until an administrator turns it on in the edge's `snmp_read` section (Edges page,
+SNMP reads; `POST /api/edges/{id}/config`). It applies live. Like the TCP relay it uses the edge's control channel,
+so an edge that is not connected answers `edge_offline`.
+
+### What the edge guarantees
+
+- **Reads only.** The request has four operations, `get`, `getnext`, `getbulk` and `walk` (a GETBULK loop), and a
+  schema that rejects any other operation or field with `400`. The edge runs them with the Device Tracker's
+  read-only session (Get, GetNext, GetBulk and nothing else), and the code that carries a request does not even
+  import the SNMP library. Build-time tests scan it, and every file of the edge and
+  API code that can reach a device, for write calls (method values included).
+- **Safety rules on the edge, before a datagram leaves**, each named in the refusal (`target_not_allowed`):
+  1. `never_poll`: loopback, link-local (including the cloud metadata addresses), multicast, the unspecified and
+     reserved addresses, and every IPv6 form that embeds one of them (the list of
+     [Where polling is allowed to go](device-kb.md#where-polling-is-allowed-to-go)). Whatever the profile says.
+  2. `edge_ceiling`: outside the edge's own operator's [ceiling](#the-edge-local-ceiling-for-snmp-reads), when one is set.
+  3. `edge_allow_list`: when the edge's `snmp_read.allow` lists networks, a target outside them.
+  4. `profile_allowed_cidrs`: when the profile lists *Allowed networks*, a target outside them.
+  5. `profile_without_networks`: a profile credential is only sent where a network was named. A profile that lists
+     no *Allowed networks* of its own is usable only when the edge's allow-list or the edge operator's ceiling names
+     the target; with none of the three, the profile cannot be used for on-demand reads and nothing is sent. (Without
+     this a client could name any address and receive the site's community.) The Edges drawer warns when the reads
+     are on and the allow-list is empty.
+  6. `sealed_without_networks`: a client-supplied (sealed) credential is only used inside the edge's allow-list or ceiling,
+     or else the allowed networks of the site's profile. With neither it goes nowhere. `sealed_port`: it may name
+     another UDP port than 161 only where the allow-list entry for the target names that port
+     (`198.51.100.0/24:1161`, IPv6 `[2001:db8::/32]:1161`).
+- **Credentials stay on the site.** A profile is named by reference and the client never holds it. The edge
+  receives only the enabled profiles of **its own site** (the profile stored under the site's name and the default
+  profile `*`), with their SNMPv2c community or SNMPv3 user (authentication and privacy keys). Other sites'
+  profiles never reach it. The rules of Settings still hold: a blank community keeps the stored one, *Clear*
+  removes it, and a changed or removed profile reaches the edge at its next sync. Storage on the edge is described
+  under [What an edge keeps on disk](#what-an-edge-keeps-on-disk).
+- **Device budget.** At most `device_rate` SNMP requests per second (default 20) are sent to one device, whoever
+  asks; a walk spends one request per GETBULK, and a request the device does not answer is repeated at most twice
+  (a credential's retries are capped at 2 and its timeout at 10 s), each repeat taking its own slot. Reads wait for
+  their turn rather than failing. The table of devices is bounded; past its cap reads fail with `limit_exceeded`.
+  The budget is a single object on the edge so that local scheduled polling, when it is added, takes from the same
+  budget: a window of reads plus scheduled polls then stays under what the switch is given. Until then it covers the
+  reads alone.
+- **Telemetry first.** SNMP work has its own bounded worker pool (`max_concurrent`, default 4); the control
+  channel is a separate connection from the event stream and the disk queue, so a busy walk never delays events.
+
+### The edge-local ceiling for SNMP reads
+
+The networks the reads may reach, the profiles' allowed networks and the credentials all come from the server, so
+by themselves they protect against a stolen client token but not against a compromised server (which could push
+an empty list and every credential). An edge's own operator can bound the reads in the edge's environment, in
+something the server does not send:
+
+| Variable | Meaning |
+|---|---|
+| `SESHAT_EDGE_SNMP_CEILING` | Comma-separated CIDRs or addresses (or `none`): the only networks SNMP reads may ever be sent to. |
+| `SESHAT_EDGE_SNMP_CEILING_FILE` | The same, one entry per line (`#` comments), read at start. |
+
+A target outside the ceiling is refused with `target_not_allowed` naming the rule `edge_ceiling`, whatever the
+server pushed; the pushed `allow` list and the profiles' networks
+can only narrow it further, never widen it, and `none` turns the reads off. With a ceiling set, a sealed credential
+may be used inside the ceiling even when the server pushed no list (the ceiling is the edge operator's own
+statement of where credentials may go). With no ceiling the reads follow the pushed configuration alone, the edge
+logs a warning when they are enabled that way and the status page says so. A ceiling that cannot be parsed keeps the
+reads off.
+
+### The API
+
+All three routes need an administrator token, or an [integration client](integrations/README.md) token that holds
+`edge.snmp.read` and whose scope names the edge (`out_of_scope` otherwise; the client's rate limit answers
+`429 limit_exceeded`).
+
+**`POST /api/edges/{id}/snmp`**
+
+```json
+{"target": "192.0.2.10",
+ "credential": {"profile": "default"},
+ "ops": [
+   {"op": "get", "oids": ["1.3.6.1.2.1.31.1.1.1.6.12", "1.3.6.1.2.1.1.5.0"]},
+   {"op": "getnext", "oids": ["1.3.6.1.2.1.2.2.1.1"]},
+   {"op": "getbulk", "oids": ["1.3.6.1.2.1.31.1.1.1.6"], "max_repetitions": 10},
+   {"op": "walk", "oid": "1.3.6.1.2.1.17.7.1.2.2", "max_rows": 5000, "vlan": 10}],
+ "window_id": "w1...."}
+```
+
+- `target`: the device's IP address (not a name).
+- `credential`: exactly one of `{"profile": "<name>"}`, where the name is the profile's key (the site's name, or
+  `*`; `default` means the site's own profile, else `*`), and `{"sealed": "<base64>"}` ([below](#sealed-one-shot-credentials)).
+- `ops`: `get`, `getnext` and `getbulk` take `oids`; `walk` takes one `oid` (the subtree) and optionally `max_rows`
+  (default 1000, hard cap 10,000). `getbulk` and `walk` take `max_repetitions` (default 20, at most 50).
+  `vlan` reads `community@vlan` on SNMPv2c (per-VLAN forwarding tables); `context` names the SNMPv3 context.
+- Limits: 16 operations and 64 OIDs per request (a walk counts as one), 20,000 rows per request, a `getbulk` of
+  at most 500 varbinds (OIDs times repetitions), a request timeout of 20 s by default (`timeout_secs`, at most 120),
+  and an answer of about 12 MiB at most (a walk is cut short and marked `truncated`; a get that would pass it fails for
+  that operation with `limit_exceeded`). A 10,000-row walk is a couple of MiB of JSON; the control channel carries
+  answers up to 16 MiB (the server logs a rejected answer at warning level, and the edge logs one it could not
+  deliver), and the peer protocol between server nodes carries signed bodies up to 20 MiB.
+
+The answer:
+
+```json
+{"target": "192.0.2.10", "elapsed_ms": 41,
+ "ops": [{"op": "get", "elapsed_ms": 6, "rows": 2,
+          "varbinds": [{"oid": "1.3.6.1.2.1.31.1.1.1.6.12", "type": "Counter32", "value": 5000},
+                       {"oid": "1.3.6.1.2.1.1.5.0", "type": "OctetString", "value": "Example Switch 3", "hex": "4578..."}]},
+         {"op": "walk", "elapsed_ms": 30, "rows": 5000, "truncated": true, "varbinds": ["..."]}]}
+```
+
+`type` is the SNMP type: `Integer`, `OctetString`, `ObjectIdentifier`, `IPAddress`, `Counter32`, `Gauge32`, `TimeTicks`,
+`Counter64`, `Opaque`, `Null`, and the three exceptions **`noSuchObject`, `noSuchInstance`, `endOfMibView`, which are
+values, not errors**. `value` is a number for the integer types (a decimal string for `Counter64`), the text of an
+`OctetString` when it is printable UTF-8, the dotted OID or address; `hex` is the raw bytes of an `OctetString`. A
+walk that stopped at `max_rows` says `truncated`. Each operation has its own `error` (`{code, message}`) with the varbinds
+it had before it failed; when the device did not answer at all, or did not accept the credential, no operation has
+anything to report and the whole request fails with `snmp_timeout` or `snmp_auth_failed` instead.
+
+| Code | Status | Meaning |
+|---|---|---|
+| `validation_failed` | 400 | Unknown operation or field, a malformed OID or target, a limit exceeded. |
+| `capability_missing`, `out_of_scope` | 403 | The client lacks `edge.snmp.read`, or the edge is outside its scope. |
+| `snmp_disabled` | 403 | The reads are off on the edge. |
+| `target_not_allowed` | 403 | A safety rule refused the target; the message names the rule. |
+| `credential_unavailable` | 422 | The profile is not on the edge, or the sealed credential cannot be used. |
+| `limit_exceeded` | 429 | Over the spacing outside or inside a window (`Retry-After`), or the edge is at its concurrent limit. |
+| `window_expired` | 409 | The window is unknown, someone else's, altered or over. |
+| `edge_offline` | 503 | The edge is not connected. |
+| `snmp_timeout` | 504 | The device did not answer in time, or the request ran out of time. |
+| `snmp_auth_failed` | 502 | The device did not accept the SNMPv3 credential. |
+| `snmp_error` | 502 | Another failure of the SNMP exchange. |
+
+A v2c device that does not know the community does not answer, so it reads as `snmp_timeout`.
+
+Every request writes one audit entry (`edge.snmp.read`): who asked, the edge, the target, the credential kind
+(and the profile's name), the operations (`get:2,walk:1`), the OID count, the rows returned, the outcome
+(`ok`, `partial`, `refused`, `invalid`, `denied`) and the code; what a caller typed is cut to 255 characters. A
+request refused at the door (an edge outside the client's scope, a body that is too large or not valid) is audited as
+`denied` with its code. **Never the values, a credential or a sealed blob.** The text of a failure inside the SNMP
+library is not sent to the client (fixed messages per class); it is in the edge's log.
+
+**`GET /api/edges/{id}/snmp/key`** returns `{"alg", "public_key", "edge_id"}`: the key to seal a credential to. The
+server asks the edge itself, so any node can answer. The Edges page and the edge's status page show the same key
+(the edge reports it in its heartbeat), with a **fingerprint** (SHA-256 of the key, 16 bytes in hex groups). The key
+comes through the server, so a compromised server could offer its own: **read the fingerprint from the edge's status
+page once and pin it** in the client (`snmpclient.Client.PinFingerprint`, or compare it yourself); a client that
+pins refuses any other key. To rotate the key, stop the edge, delete `snmp-seal.key`, start it, read the new
+fingerprint and update the pins; blobs sealed to the old key stop working at once, and the stored credentials file
+(encrypted under a key derived from the seal key) is fetched from the server again at the next sync.
+
+**`POST /api/edges/{id}/snmp/windows`**: see below.
+
+### Windows and rates
+
+Reads on a cutover day come every 10 to 30 seconds, not every few minutes. A client opens a **window**:
+`{"targets": ["192.0.2.10", ...], "min_interval_s": 10, "expires_in_s": 14400}` (at least 10 s, or the edge's own floor `snmp_read.limits.min_window_secs`, at most 8 hours, at most
+256 targets) and gets an id to pass as `window_id`. The edge then allows that client one request per
+`min_interval_s` to each of those targets. **Outside a window the rate is stricter: one request per 60 seconds
+per client and device** (`outside_gap_secs`, per edge). A request that comes too soon gets `429 limit_exceeded` with
+`Retry-After`. The id is the window itself, sealed with a key the servers share, so any node of a cluster checks it
+without storing anything; it is bound to the client that opened it, the edge and the caller's *window epoch*.
+An administrator ends every window a caller has open, on every edge, with
+`POST /api/edges/snmp-windows/revoke` `{"client": "client:<name>"}` (the name the audit trail shows): that bumps the
+caller's epoch, and its older windows answer `window_expired` at once, on every node. New windows work. The edge's
+floor stops a client from promising a rate the administrator does not want to see (it is the shortest
+`min_interval_s` a window may name, default and lowest 10 s). and a window that has ended, or
+that someone altered, answers `window_expired`. A target the window does not list is a `400`. The edge does the
+counting, because it is the one place that sees every request to its devices whichever node they came in by.
+
+### Sealed one-shot credentials
+
+A client that does not want to use the site's stored profile can send its own credential for one request, sealed
+so that **only the edge can open it**. The server forwards the blob and never sees the credential; the edge uses
+it for that request and never stores it, logs it or sends it upstream.
+
+1. Fetch the edge's public key (`GET .../snmp/key`).
+2. Seal `{"version": "2c", "community": "..."}` or `{"version": "3", "user": "...", "auth_proto": "SHA",
+   "auth_pass": "...", "priv_proto": "AES", "priv_pass": "..."}` (optionally `port`, `timeout_seconds`, `retries`),
+   with the edge's id, the target and an expiry of at most five minutes inside it.
+3. Send it as `credential.sealed`.
+
+Seal for **at most four minutes** (the helpers do; the edge accepts up to five): the clocks of the client and the edge
+both count, and a short life leaves little to replay if a blob leaks. A blob from a client whose clock is more than a
+minute ahead of the edge's is refused as not valid yet, an old one as expired, and the refusal says to check the
+clocks.
+
+The scheme is an anonymous sealed box: an ephemeral X25519 key pair, a key from HKDF-SHA256 over the shared secret
+(salted with both public keys), and XChaCha20-Poly1305, laid out as `0x01 | ephemeral public key (32) | nonce (24) |
+ciphertext`, base64. The sealed payload names the edge, the target and the expiry, so another edge, another
+target, a late replay or a second use of the same blob is `credential_unavailable`. The edge keeps only the blob's
+nonce, until it would have expired anyway.
+
+
+### The edge's section
+
+```json
+"snmp_read": {"enabled": true, "allow": ["192.0.2.0/24", "198.51.100.0/24:1161"],
+              "limits": {"max_concurrent": 4, "timeout_secs": 20, "device_rate": 20, "outside_gap_secs": 60, "min_window_secs": 10}}
+```
+
+`allow` is the list of networks the reads may reach (rule 3 above; an entry may name a UDP port for sealed credentials,
+rule 6). Leave it empty only if every profile lists its own allowed networks or the edge has a ceiling: otherwise no
+profile can be used (rule 5). Credentials are not part of what you
+set: the server adds the site's profiles to the document it serves to an edge that has `enabled` on, and they
+never appear in the registry's view of the edge.
+
+### Metrics and status
+
+On the edge (`/metrics` and the status page): `seshat_edge_snmp_available` (0 when the seal key could not be used),
+`seshat_edge_snmp_enabled`, `_active`, `_requests_total`, `_ok_total`,
+`_refused_total{rule}` (the safety rule that refused, or the error code), `_timeouts_total`, `_rows_total`, `_pdus_total`
+(requests sent to devices) and `_ops_total{op}`.
+
 ## Footprint
 
 Measured on one 16-core development host, with the edge enrolled against a server on the same box,
@@ -216,7 +639,8 @@ Target from the specification: under 100 MB.
 
 ## Limits of this release
 
-SNMPv3 users and TLS syslog listeners are not distributed to edges; the Edges drawer edits the SNMP and syslog listeners but the `flow` block is API/JSON only; local
-Device Tracker polling at the edge is not available yet; a changed packs set or
+SNMPv3 trap users and TLS syslog listeners are not distributed to edges (the SNMP polling profiles of the [SNMP reads](#snmp-reads) are, but only to an edge that has them switched on); the Edges drawer edits the SNMP and syslog listeners but the `flow` block is API/JSON only; local
+Device Tracker polling at the edge is not available yet (the per-device request budget of the SNMP reads is built to be
+shared with it when it arrives); a changed packs set or
 configuration restarts the pipeline instead of reloading it; one batch in flight per edge (the measurement above kept up
 with 9,000 events/s; the ceiling was not measured).

@@ -20,6 +20,7 @@ The pages below are the operator's view of each part. Start with the deployment 
 | Routing and outputs | [`outputs.md`](outputs.md) | The route expression grammar, destination types, queues and retries, secrets, the shared message bus |
 | Device Tracker | [`device-tracker.md`](device-tracker.md) | How location is determined, uplink exclusion, polling and per-VLAN contexts, event-driven sightings, freshness, watch lists, the lookup API, the read-only guarantee |
 | Device Tracker portal | [`device-tracker-portal.md`](device-tracker-portal.md) | Data modes, SSO setup, scoping, redaction, audit |
+| Integrations | [`integrations/README.md`](integrations/README.md) | One model for other apps: integration clients, capabilities, token rotation, rate limits, error codes, audit and metrics, the versioned contracts list |
 | Common schema | [`schema/`](schema/README.md) | Every field of every dataset (`fields.md`), JSON Schema, one synthetic example per dataset, the Device Tracker portal contract |
 
 Index templates, pipelines and ready-made settings for the output side are in [`../deploy/`](../deploy): OpenSearch and

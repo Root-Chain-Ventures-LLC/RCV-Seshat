@@ -13,6 +13,7 @@ the Device Tracker portal are built against it.
 | [`seshat-event.schema.json`](seshat-event.schema.json) | JSON Schema (draft 2020-12) for one event document, all datasets |
 | [`examples/`](examples) | One synthetic document per dataset; each validates against the schema |
 | [`tracker.md`](tracker.md) | The Seshat to Device Tracker portal data contract |
+| [`events.md`](events.md) | The integration event contract (`seshat.event` v1): the events other apps subscribe to |
 | [`../../deploy/elasticsearch`](../../deploy/elasticsearch) | Component/index templates and an ILM example for Elasticsearch |
 | [`../../deploy/opensearch`](../../deploy/opensearch) | The same for OpenSearch, plus an ISM example |
 | [`../../deploy/logstash`](../../deploy/logstash) | A Beats-input pipeline that routes by dataset into the data streams |

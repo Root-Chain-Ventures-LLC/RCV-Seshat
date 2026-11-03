@@ -319,6 +319,44 @@ SESHAT_SECRET_KEY=<identical on every node>
   makes the same choice). Addresses and hostnames of a device are unioned. Devices are matched by
   scope and address, engine ID or serial, never by internal ID.
 
+### The edge relay across nodes
+
+An edge keeps one control connection (and, for the [relay](edge.md#relay), one short-lived pair of streams
+per session) to *a* node, whichever one the load balancer, the anycast route or the VRRP address gives it.
+A client's relay request may arrive at a different node. The node that receives it mints the request, asks
+its peers which of them holds the edge's control connection (a small signed `POST` under
+`/cluster/v1/ext/`), and has that node send the request down. The edge tags its answers with the ID of
+the node that minted the request; whichever node receives an answer or a stream passes it on to that node
+over the same signed peer protocol. A relay session therefore works whichever nodes the edge and the client
+reach, at the price of one extra hop between nodes for the session's bytes when they differ. If no node holds
+the edge's control connection the client gets `edge_offline`.
+
+- The calls that carry a request or an answer (small JSON bodies) are signed together with a hash of the body,
+  and the receiving node refuses them unless the body matches. The streams that carry a session's bytes are not
+  covered by the signature (they are the client's own TLS or SSH, or plain bytes if the target speaks a plain
+  protocol).
+- Relay forwarding is refused towards a peer configured as plain `http://` on a non-loopback address, unless
+  `SESHAT_CLUSTER_ALLOW_PLAIN_RELAY=1` says the link between the nodes is private enough. Use `https://` peer URLs
+  or a private segment.
+- Needs the peer protocol (`SESHAT_CLUSTER_PEERS` and `SESHAT_CLUSTER_SECRET`). The relay's bytes cross the
+  link between nodes as the client sent them (inside the client's own TLS or SSH, unless the target speaks a
+  plain protocol): the peer protocol signs requests but does not encrypt, so keep it on a private network or
+  use `https://` peer URLs, as for the rest of it.
+- With PostgreSQL and no peers configured, a node knows only its own control connections: point every edge
+  and every client at one node (or an address that reaches one node at a time, such as the active-standby
+  address), or configure the peers.
+- Sessions do not survive the loss of a node: the client's connection ends and the audit entry says
+  `edge_dropped`.
+
+### SNMP reads across nodes
+
+The SNMP reads ([edge.md](edge.md#snmp-reads)) ride the same control channel, so a request that enters any node reaches the
+node that holds the edge's connection. Nothing is stored for them: a window is a sealed, self-checking id every node can
+verify, and the rates are counted on the edge, which sees every request whichever node it came through. The one thing
+kept is each caller's window epoch (a setting in the shared database), so that revoking a caller's windows takes effect on
+every node. An edge's answer can be large (a walk of 10,000 rows is a couple of MiB): when it lands on another node
+than the one that asked, the peer protocol carries it as a signed body of up to 20 MiB.
+
 ## Mode 3: BGP anycast
 
 Every healthy node announces the **same** service address (a /32, and a /128 for IPv6) to your
