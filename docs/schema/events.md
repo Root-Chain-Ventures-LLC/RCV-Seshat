@@ -54,8 +54,8 @@ Every kind is produced by something Seshat already emits; none exists only for i
 | `tracker.new` | Device Tracker, `seshat.tracker` `interval-opened` | as above | The first interval of a MAC address the tracker had never seen. |
 | `tracker.sighting` | Device Tracker, `seshat.tracker` `interval-opened` | as above | An interval opened for a known MAC that is neither new nor a move: a device seen again after its interval closed. |
 | `tracker.watch` | Device Tracker, `seshat.tracker` `watch.hit` | as above | A watch-list entry matched. `seshat.tracker.watch` carries the entry's `id` and `kind`; its `value`, `label` and the `reason` (`appeared`, `moved`, `seen`) are operator-written and are removed from what clients receive (pull and webhook): only an administrator's read of the log has them. The tracker's own quiet period (ten minutes per entry, MAC and reason) applies. |
-| `link.up` | traps (`seshat.trap`, IF-MIB `linkUp`) and syslog (`event.action` `interface-up`) | the device's site and tenant from the inventory; for a device not in the inventory, the site of the input that received the message, and no tenant | An interface came up: an IF-MIB `linkUp` trap (notification `1.3.6.1.6.3.1.1.5.4`), or a vendor syslog message that a pack maps to `interface-up`. |
-| `link.down` | traps (`seshat.trap`, IF-MIB `linkDown`) and syslog (`event.action` `interface-down`) | as above | An interface went down (`linkDown`, notification `1.3.6.1.6.3.1.1.5.3`, or syslog mapped to `interface-down`). |
+| `link.up` | traps (`seshat.trap`, IF-MIB `linkUp`, `event.action` `interface-up`) and syslog (`event.action` `interface-up`) | the device's site and tenant from the inventory; for a device not in the inventory, the site of the input that received the message, and no tenant | An interface came up: an IF-MIB `linkUp` trap (notification `1.3.6.1.6.3.1.1.5.4`), or a vendor syslog message that a pack maps to `interface-up`. |
+| `link.down` | traps (`seshat.trap`, IF-MIB `linkDown`, `event.action` `interface-down`) and syslog (`event.action` `interface-down`) | as above | An interface went down (`linkDown`, notification `1.3.6.1.6.3.1.1.5.3`, or syslog mapped to `interface-down`). |
 
 Not offered as kinds: interval closes and extensions, `unknown.appeared`, and `interface-admin-down`. A
 new kind is an additive change.
@@ -69,7 +69,7 @@ rest of the schema.
 | Path | Present on | Meaning |
 |---|---|---|
 | `@timestamp` | all | When the event was produced. |
-| `event.action` | all | `interval-opened` or `watch.hit` (tracker); `linkUp` or `linkDown`, the notification name (traps); `interface-up` or `interface-down` (syslog). |
+| `event.action` | all | `interval-opened` or `watch.hit` (tracker); `interface-up` or `interface-down` (traps and syslog; the trap's notification name stays in `seshat.trap.name`). |
 | `event.dataset` | all | `seshat.tracker`, `seshat.trap` or `seshat.syslog`. |
 | `event.severity` | tracker | Numeric severity. |
 | `message` | link | The one-line rendering of the trap or syslog message. |
@@ -105,7 +105,7 @@ Example `data` of a `link.down`:
 ```json
 {
   "@timestamp": "2026-11-02T21:56:19.057Z",
-  "event": {"action": "linkDown", "dataset": "seshat.trap"},
+  "event": {"action": "interface-down", "dataset": "seshat.trap"},
   "message": "IF-MIB::linkDown ifIndex.10114=10114 ifOperStatus.10114=down",
   "host": {"ip": ["192.0.2.11"], "name": "Example Switch 3"},
   "seshat": {

@@ -1,0 +1,31 @@
+{
+  "@timestamp": "2026-10-12T14:03:07.412Z",
+  "ecs": { "version": "8.11.0" },
+  "data_stream": { "type": "logs", "dataset": "seshat.passthrough", "namespace": "exo" },
+  "event": {
+    "kind": "event",
+    "dataset": "seshat.passthrough",
+    "module": "seshat",
+    "id": "01K7XEXAMPLE0PASS0000001",
+    "created": "2026-10-12T14:03:07.412Z",
+    "original": "<165>1 2026-10-12T14:03:07.412Z switch3.example.com sshd 2411 ID47 - Failed password for invalid user admin from 198.51.100.77 port 52311 ssh2"
+  },
+  "observer": {
+    "vendor": "Example Org",
+    "product": "Seshat",
+    "version": "0.1.0",
+    "type": "gateway"
+  },
+  "seshat": {
+    "schema_version": "1.0",
+    "source": {
+      "listener": "syslog-udp-default",
+      "input": "syslog",
+      "protocol": "udp",
+      "ip": "192.0.2.11",
+      "port": 51514,
+      "site": "example-site-a"
+    },
+    "passthrough": { "encoding": "utf8", "bytes": 142 }
+  }
+}

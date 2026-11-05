@@ -13,6 +13,7 @@ the Device Tracker portal are built against it.
 | [`seshat-event.schema.json`](seshat-event.schema.json) | JSON Schema (draft 2020-12) for one event document, all datasets |
 | [`examples/`](examples) | One synthetic document per dataset; each validates against the schema |
 | [`tracker.md`](tracker.md) | The Seshat to Device Tracker portal data contract |
+| [`passthrough.md`](passthrough.md) | The passthrough stream (`seshat.passthrough` v1): the original message of an input, untouched, beside the enriched event |
 | [`events.md`](events.md) | The integration event contract (`seshat.event` v1): the events other apps subscribe to |
 | [`../../deploy/elasticsearch`](../../deploy/elasticsearch) | Component/index templates and an ILM example for Elasticsearch |
 | [`../../deploy/opensearch`](../../deploy/opensearch) | The same for OpenSearch, plus an ISM example |
@@ -26,9 +27,10 @@ the Device Tracker portal are built against it.
    `host.*` is the sending device as observed, `observer.*` is Seshat itself, `source.*` /
    `destination.*` / `network.*` describe the traffic in flow and firewall-style events.
 2. **`seshat.*` common block**, present on most datasets: `seshat.schema_version`,
-   `seshat.source.*` (listener-derived scope: listener, site, VRF, edge), `seshat.device.*` (what
-   the device knowledge base knows about the sender), `seshat.enrichment.*` (how much was known
-   and how fresh it was), `seshat.route.*` (fan-out debugging).
+   `seshat.source.*` (listener-derived scope: listener, site, VRF, edge, and the id of the passthrough record when the input has one), `seshat.device.*` (what
+   the device knowledge base knows about the sender), `seshat.enrichment.*` (how much was known,
+   how fresh it was, and which pack, device-record source, MIB module or registry set each enriched
+   field: `fields` and `origins`, see [`../inspector.md`](../inspector.md)), `seshat.route.*` (fan-out debugging).
 3. **`seshat.<dataset>.*` blocks**, one per dataset: `seshat.trap`, `seshat.syslog`,
    `seshat.flow`, `seshat.rollup`, `seshat.tracker`. The `seshat.device.*` block also carries the
    full record for the `seshat.device` dataset.
@@ -49,6 +51,7 @@ the Device Tracker portal are built against it.
 | `seshat.tracker` | event | Device Tracker sightings and interval changes | `logs-seshat.tracker-exo` |
 | `seshat.device` | state | device knowledge-base records | `logs-seshat.device-exo` |
 | `seshat.metric` | metric | streaming-telemetry samples (gNMI, Cisco MDT, Juniper JTI) | `logs-seshat.metric-exo` |
+| `seshat.passthrough` | event | the original message of an input with passthrough on, untouched (see [`passthrough.md`](passthrough.md)) | `logs-seshat.passthrough-exo` |
 
 Unknown devices produce the full event with `seshat.device.status: unknown`; the schema has no
 "partial" document shape.
@@ -101,7 +104,7 @@ logs-<dataset>-<namespace>        e.g.  logs-seshat.trap-exo
 ```
 
 - `<dataset>` is the literal `event.dataset` value (`seshat.trap`, `seshat.syslog`, `seshat.flow`,
-  `seshat.flow_rollup`, `seshat.tracker`, `seshat.device`, `seshat.metric`). It contains a dot and, for
+  `seshat.flow_rollup`, `seshat.tracker`, `seshat.device`, `seshat.metric`, `seshat.passthrough`). It contains a dot and, for
   `flow_rollup`, an underscore, but **never a hyphen** (Elasticsearch splits the stream name on
   hyphens, so a hyphen in the dataset would break the type/dataset/namespace parse).
 - `<namespace>` is `org_short` lowercased (default brand `RCV` gives `rcv`). `org_short` is

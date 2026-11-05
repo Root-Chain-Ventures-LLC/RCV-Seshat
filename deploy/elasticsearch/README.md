@@ -14,6 +14,7 @@ Data-stream templates for the common schema in [`docs/schema`](../../docs/schema
 | `index-template-seshat-flow-rollup.json` | `seshat-flow-rollup` for `logs-seshat.flow_rollup-*` |
 | `index-template-seshat-tracker.json` | `seshat-tracker` for `logs-seshat.tracker-*` |
 | `index-template-seshat-device.json` | `seshat-device` for `logs-seshat.device-*` |
+| `index-template-seshat-passthrough.json` | `seshat-passthrough` for `logs-seshat.passthrough-*` (the original messages of inputs with passthrough on; `event.original` is searchable text) |
 
 Status: written against Elasticsearch 8.x (component and composable templates, data streams,
 `constant_keyword`, `flattened`, `match_only_text`). They were **not** run against a live
@@ -34,7 +35,7 @@ J=(-H 'Content-Type: application/json')
 
 curl -sS "${AUTH[@]}" "${J[@]}" -X PUT "$ES_URL/_ilm/policy/seshat-logs" -d @ilm-seshat-logs.json
 curl -sS "${AUTH[@]}" "${J[@]}" -X PUT "$ES_URL/_component_template/seshat-core" -d @component-template-seshat-core.json
-for t in trap syslog flow flow-rollup tracker device; do
+for t in trap syslog flow flow-rollup tracker device passthrough; do
   curl -sS "${AUTH[@]}" "${J[@]}" -X PUT "$ES_URL/_index_template/seshat-$t" -d @index-template-seshat-$t.json
 done
 ```

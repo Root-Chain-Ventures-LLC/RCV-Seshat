@@ -11,8 +11,10 @@ Seshat collects model-driven streaming telemetry and turns every leaf value into
 | `jti` / `gnmi` | dial-out | `/Subscriber/DialOutSubscriber` (Juniper, reported as `jti`) and `/gnmi_dialout.gNMIDialOut/Publish` (reported as `gnmi`), both streams of gNMI `SubscribeResponse` | the device |
 
 Seshat is read-only toward devices: a dial-in subscription only reads. The roles `all` and
-`collector` run the input; the console role does not, and the edge role does not forward telemetry
-in this release.
+`collector` run the input; the console role does not. An **edge collector** runs it too, for devices on
+a network the server cannot reach: it can listen for dial-out telemetry and dial the dial-in targets
+that an administrator assigns to it, and forwards the samples to the server as ordinary `seshat.metric`
+events over its disk-buffered stream ([Streaming telemetry on an edge](#streaming-telemetry-on-an-edge)).
 
 ## Ports and settings
 
@@ -41,8 +43,8 @@ allow-list, and a firewall; bind it to `127.0.0.1` when only a local relay talks
 
 Publishing the port: `compose.yaml` maps `57400:57400` (tcp), the Helm chart exposes it as
 `intake.ports.telemetryDialout` (`{enabled: true, port: 57400}`, a TCP port on the intake Service
-and the StatefulSet), and `deploy/k8s/examples/networkpolicy.yaml` allows it. The edge role does not
-serve telemetry in this release, so `compose.edge.yaml` publishes nothing for it.
+and the StatefulSet), and `deploy/k8s/examples/networkpolicy.yaml` allows it. An edge that
+runs a dial-out listener publishes its own port (`compose.edge.yaml` has the line, commented out).
 
 The settings live in the store (key `inputs.telemetry`); no migration is involved. Target
 passwords and client keys are sealed with `SESHAT_SECRET_KEY` (the facility SNMPv3 passphrases use),
@@ -67,6 +69,11 @@ One `Subscribe` stream carries all subscriptions of a gNMI target. Credentials t
 credentials without TLS` and a warning is logged. Turn TLS on for the target, or, for a lab or a
 trusted link, set `insecure: true` on the target ("Allow sending the username and password without
 TLS" in the UI); Seshat then connects and logs a warning that the credentials travel in clear text.
+
+**Run on.** A target is dialled by exactly one collector: `run_on` is `server` (the default) or
+`edge:<id>`. The edge gets the target, its credentials and TLS material sealed in its configuration
+(see below); the server stops dialling at once and shows the target with its owner. Moving a target is a
+hand-over without overlap, see [Streaming telemetry on an edge](#streaming-telemetry-on-an-edge).
 
 A session that ends (network, device reboot, reset) is retried with exponential backoff, 1 s
 doubling to 60 s with jitter, reset once a session has delivered data. The Telemetry page shows per
@@ -97,6 +104,30 @@ stream and neither loses the other values of the same message.
 
 The device's own name (MDT `node_id_str`, gNMI `prefix.target`) becomes `host.name` unless it is an
 IP address, and is offered to the device knowledge base as a hostname hint.
+
+## Streaming telemetry on an edge
+
+An edge on a network the server cannot route to (a dual-homed host between a management network and the
+server network, say) runs the same decoders and the same sessions as the server, and sends the result
+upstream. Full operator guide: [`../edge.md`](../edge.md#streaming-telemetry).
+
+* **Dial-out on the edge.** The edge's configuration has a `telemetry` section (Edges page, drawer,
+  *Streaming telemetry*): `dialout_listen`, an allow-list, the limits of the table above, and optional
+  TLS (`tls_cert`, `tls_key`, `client_ca`). Point the devices at the edge's address. The Cisco MDT,
+  Juniper `DialOutSubscriber` and gNMI dial-out services are served on that one port.
+* **Dial-in from the edge.** In Inputs, Telemetry, give the target *Run on* an edge (`run_on`:
+  `edge:<id>`). The edge dials it from its own network. Passwords and client keys are sent to that edge
+  only, are never written to `edge.json` and are kept encrypted on the edge.
+* **The events.** Samples are `seshat.metric` events stamped with the edge's site, VRF and id
+  (`seshat.source.edge`), queued on the edge's disk while the link is down, and handled on the server
+  exactly like locally collected ones: routes, the device knowledge base, and the Prometheus
+  remote-write, InfluxDB and OTLP destinations. 64-bit integers keep every digit across the stream. Telemetry
+  has a rate limit and a queue share of its own on the edge, so a flood of samples is shed first and never
+  starves traps and syslog; an edge dials its targets only on a configuration the server confirmed lately
+  (the lease).
+* **State.** The Telemetry page shows each target with its owner and what the edge last reported (state,
+  last message, messages, last error). The edge's status page and `/metrics` carry the same counters
+  (`seshat_telemetry_*`).
 
 ## The metric event
 

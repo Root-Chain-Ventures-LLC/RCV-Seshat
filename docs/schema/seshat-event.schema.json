@@ -28,7 +28,8 @@
             "seshat.flow_rollup",
             "seshat.tracker",
             "seshat.device",
-            "seshat.metric"
+            "seshat.metric",
+            "seshat.passthrough"
           ]
         }
       }
@@ -199,6 +200,28 @@
       },
       "then": {
         "$ref": "#/$defs/dataset_metric"
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "event"
+        ],
+        "properties": {
+          "event": {
+            "required": [
+              "dataset"
+            ],
+            "properties": {
+              "dataset": {
+                "const": "seshat.passthrough"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/dataset_passthrough"
       }
     }
   ],
@@ -445,6 +468,21 @@
             "device": {
               "$ref": "#/$defs/shared_seshat_device"
             },
+            "interface": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "index": {
+                  "type": "integer"
+                },
+                "state": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
             "enrichment": {
               "type": "object",
               "properties": {
@@ -468,6 +506,15 @@
                 },
                 "backfilled": {
                   "type": "boolean"
+                },
+                "fields": {
+                  "type": "object"
+                },
+                "origins": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
                 }
               },
               "required": [
@@ -746,6 +793,9 @@
               "format": "date-time"
             },
             "original": {
+              "type": "string"
+            },
+            "timezone": {
               "type": "string"
             },
             "severity": {
@@ -1069,6 +1119,21 @@
             "device": {
               "$ref": "#/$defs/shared_seshat_device"
             },
+            "interface": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "index": {
+                  "type": "integer"
+                },
+                "state": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
             "enrichment": {
               "type": "object",
               "properties": {
@@ -1092,6 +1157,15 @@
                 },
                 "backfilled": {
                   "type": "boolean"
+                },
+                "fields": {
+                  "type": "object"
+                },
+                "origins": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
                 }
               },
               "required": [
@@ -1220,6 +1294,9 @@
                   "type": "string"
                 },
                 "msgid": {
+                  "type": "string"
+                },
+                "timezone_source": {
                   "type": "string"
                 },
                 "sd": {
@@ -1613,6 +1690,15 @@
                 },
                 "backfilled": {
                   "type": "boolean"
+                },
+                "fields": {
+                  "type": "object"
+                },
+                "origins": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
                 }
               },
               "required": [
@@ -2099,6 +2185,15 @@
                 },
                 "backfilled": {
                   "type": "boolean"
+                },
+                "fields": {
+                  "type": "object"
+                },
+                "origins": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
                 }
               },
               "required": [
@@ -2459,6 +2554,15 @@
                 },
                 "backfilled": {
                   "type": "boolean"
+                },
+                "fields": {
+                  "type": "object"
+                },
+                "origins": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
                 }
               },
               "required": [
@@ -3321,6 +3425,15 @@
                 },
                 "backfilled": {
                   "type": "boolean"
+                },
+                "fields": {
+                  "type": "object"
+                },
+                "origins": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
                 }
               },
               "required": [
@@ -3416,6 +3529,277 @@
       ],
       "$comment": "seshat.metric: streaming telemetry samples (gNMI, Cisco MDT, Juniper JTI): one document per leaf value."
     },
+    "dataset_passthrough": {
+      "type": "object",
+      "properties": {
+        "@timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ecs": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "const": "8.11.0"
+            }
+          },
+          "required": [
+            "version"
+          ]
+        },
+        "data_stream": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "logs"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.passthrough"
+            },
+            "namespace": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$",
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "type",
+            "dataset",
+            "namespace"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "labels": {
+          "type": "object"
+        },
+        "event": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "event",
+                "metric",
+                "state"
+              ]
+            },
+            "category": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "action": {
+              "type": "string"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.passthrough"
+            },
+            "module": {
+              "type": "string",
+              "const": "seshat"
+            },
+            "id": {
+              "type": "string"
+            },
+            "created": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "ingested": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "original": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "dataset",
+            "module",
+            "id",
+            "created",
+            "original"
+          ]
+        },
+        "observer": {
+          "type": "object",
+          "properties": {
+            "vendor": {
+              "type": "string"
+            },
+            "product": {
+              "type": "string",
+              "const": "Seshat"
+            },
+            "version": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "gateway"
+              ]
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "vendor",
+            "product",
+            "version"
+          ]
+        },
+        "seshat": {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+$"
+            },
+            "source": {
+              "type": "object",
+              "properties": {
+                "listener": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "string",
+                  "enum": [
+                    "snmp",
+                    "syslog",
+                    "flow",
+                    "poller",
+                    "edge",
+                    "telemetry"
+                  ]
+                },
+                "protocol": {
+                  "type": "string",
+                  "enum": [
+                    "udp",
+                    "tcp",
+                    "tls",
+                    "grpc"
+                  ]
+                },
+                "ip": {
+                  "type": "string",
+                  "anyOf": [
+                    {
+                      "format": "ipv4"
+                    },
+                    {
+                      "format": "ipv6"
+                    }
+                  ]
+                },
+                "port": {
+                  "type": "integer"
+                },
+                "site": {
+                  "type": "string"
+                },
+                "vrf": {
+                  "type": "string"
+                },
+                "edge": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "listener",
+                "input"
+              ],
+              "additionalProperties": false
+            },
+            "route": {
+              "type": "object",
+              "properties": {
+                "matched": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "destinations": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "passthrough": {
+              "type": "object",
+              "properties": {
+                "encoding": {
+                  "type": "string"
+                },
+                "bytes": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "encoding",
+                "bytes"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "schema_version",
+            "source",
+            "passthrough"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "@timestamp",
+        "ecs",
+        "data_stream",
+        "event",
+        "observer",
+        "seshat"
+      ],
+      "$comment": "seshat.passthrough: the original message exactly as a listener read it, with a minimal envelope (the passthrough stream)."
+    },
     "shared_seshat_source": {
       "type": "object",
       "properties": {
@@ -3463,6 +3847,9 @@
           "type": "string"
         },
         "edge": {
+          "type": "string"
+        },
+        "passthrough_id": {
           "type": "string"
         }
       },

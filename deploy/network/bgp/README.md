@@ -30,8 +30,10 @@ both sides if you use one.
 
 ## Rules every example follows
 
-- **Neighbour to each node**, not to the anycast address. Seshat connects out to the router; do not
-  configure the router side as passive-only towards a node that has `listen_port` off.
+- **Neighbour to each node**, not to the anycast address. Seshat connects out to the router and the router
+  stays passive towards the nodes (it accepts, it does not initiate): with TTL security the library's
+  listener does not answer with TTL 255, so a session the router starts may be discarded by the router itself.
+  Leave `listen_port` off in Seshat.
 - **Import only the service prefixes** (exact /32 and /128), reject everything else, and export
   nothing to the nodes. A misbehaving node can then never inject a route.
 - **ECMP**: `maximum-paths` at least as large as the number of nodes. All nodes share one AS, so the
@@ -43,6 +45,13 @@ both sides if you use one.
   the line, commented out; it needs a BFD responder on the node's host (for example FRR `bfdd`).
 - **Hashing**: make the router hash on source (and destination) address so one sender stays on one
   node. The platform notes are in each file and in the ECMP section of the guide.
+- **GTSM (TTL security, RFC 5082)**: Seshat turns it on by default for a directly connected eBGP
+  neighbour added now (one stored by an earlier version keeps it off): it sends with TTL 255 and the kernel drops anything of that session that arrives with less,
+  so only a router on the same link can reach the BGP port. The router must do the same or the session
+  never comes up: `frr.conf` has `ttl-security hops 1`; the other platforms have an equivalent (Cisco and
+  VyOS `ttl-security hops 1`, Arista `ttl maximum-hops 1`; check the name for your release). For a
+  neighbour that cannot do GTSM, or is more than one hop away, set `ttl_security` to `false` (and
+  `multihop_ttl` to the hop count) in the Seshat neighbour entry.
 - **Passwords**: the TCP-MD5 key is optional. Use the same key as in the Seshat neighbour entry.
   `CHANGE-ME` is a placeholder, not a default.
 

@@ -8,7 +8,7 @@ templates match `logs-seshat.<dataset>-*`.
 |---|---|
 | `ism-seshat-logs.json` | ISM policy `seshat-logs` (example: rollover at 1 d or 50 GB, force-merge at 7 d, delete at 90 d); attaches itself to `logs-seshat.*` through `ism_template` |
 | `component-template-seshat-core.json` | Component template `seshat-core` |
-| `index-template-seshat-{trap,syslog,flow,flow-rollup,tracker,device}.json` | Index templates `seshat-trap`, `seshat-syslog`, `seshat-flow`, `seshat-flow-rollup`, `seshat-tracker`, `seshat-device` |
+| `index-template-seshat-{trap,syslog,flow,flow-rollup,tracker,device,passthrough}.json` | Index templates `seshat-trap`, `seshat-syslog`, `seshat-flow`, `seshat-flow-rollup`, `seshat-tracker`, `seshat-device`, `seshat-passthrough` |
 
 Status: these files were accepted by an OpenSearch **2.18.0** cluster and exercised with the six
 example documents (documents created in the six data streams; `nested`, `flat_object`, `ip` and
@@ -25,7 +25,7 @@ J=(-H 'Content-Type: application/json')
 
 curl -sS "${CURL_AUTH[@]}" "${J[@]}" -X PUT "$OS_URL/_plugins/_ism/policies/seshat-logs" -d @ism-seshat-logs.json
 curl -sS "${CURL_AUTH[@]}" "${J[@]}" -X PUT "$OS_URL/_component_template/seshat-core" -d @component-template-seshat-core.json
-for t in trap syslog flow flow-rollup tracker device; do
+for t in trap syslog flow flow-rollup tracker device passthrough; do
   curl -sS "${CURL_AUTH[@]}" "${J[@]}" -X PUT "$OS_URL/_index_template/seshat-$t" -d @index-template-seshat-$t.json
 done
 ```

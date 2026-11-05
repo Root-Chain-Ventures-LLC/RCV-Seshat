@@ -118,6 +118,10 @@
               "index": false,
               "doc_values": false
             },
+            "timezone": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
             "severity": {
               "type": "long"
             },
@@ -235,6 +239,10 @@
                 "edge": {
                   "type": "keyword",
                   "ignore_above": 1024
+                },
+                "passthrough_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
                 }
               }
             },
@@ -333,6 +341,12 @@
                 },
                 "backfilled": {
                   "type": "boolean"
+                },
+                "fields": {
+                  "type": "flat_object"
+                },
+                "origins": {
+                  "type": "flat_object"
                 }
               }
             },

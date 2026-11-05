@@ -1,0 +1,52 @@
+{
+  "index_patterns": [
+    "logs-seshat.passthrough-*"
+  ],
+  "data_stream": {},
+  "priority": 200,
+  "version": 1,
+  "composed_of": [
+    "seshat-core"
+  ],
+  "_meta": {
+    "managed_by": "seshat",
+    "seshat_schema_version": "1.0",
+    "ecs_version": "8.11.0",
+    "description": "Seshat seshat.passthrough data streams: the original message exactly as a listener read it, with a minimal envelope (the passthrough stream)."
+  },
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": 1,
+        "number_of_replicas": 1
+      }
+    },
+    "mappings": {
+      "properties": {
+        "seshat": {
+          "dynamic": false,
+          "properties": {
+            "passthrough": {
+              "properties": {
+                "encoding": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "bytes": {
+                  "type": "long"
+                }
+              }
+            }
+          }
+        },
+        "event": {
+          "properties": {
+            "original": {
+              "type": "text"
+            }
+          }
+        }
+      }
+    }
+  }
+}

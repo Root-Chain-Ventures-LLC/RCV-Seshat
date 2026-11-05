@@ -26,6 +26,21 @@
         "seshat": {
           "dynamic": false,
           "properties": {
+            "interface": {
+              "properties": {
+                "name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "index": {
+                  "type": "long"
+                },
+                "state": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
             "trap": {
               "properties": {
                 "oid": {

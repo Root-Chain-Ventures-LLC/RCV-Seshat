@@ -34,7 +34,7 @@ x-hardened: &hardened
 services:
   seshat-edge:
     <<: *hardened
-    image: ${SESHAT_IMAGE:-ghcr.io/root-chain-ventures-llc/seshat:0.5.0}
+    image: ${SESHAT_IMAGE:-ghcr.io/root-chain-ventures-llc/seshat:0.6.0}
     restart: unless-stopped
     command: ["--role", "edge"]
     env_file:
@@ -45,12 +45,14 @@ services:
       SESHAT_LISTEN: ":8082"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Streaming telemetry (57400/tcp dial-out) is not served by the edge role in this release, so no port is published for it.
+    # Streaming telemetry dial-out: when the edge's configuration has a telemetry.dialout_listen of :57400, devices
+    # connect to it on 57400/tcp; uncomment the line below (and restrict it with the host firewall).
     ports:
       - "127.0.0.1:8082:8082"   # status page, local only
       # Devices send here: allow only your device networks to reach these with the host firewall.
       - "162:1162/udp"
       - "514:1514/udp"
+      # - "57400:57400"
       - "514:1514/tcp"
     volumes:
       - seshat-edge-data:/data

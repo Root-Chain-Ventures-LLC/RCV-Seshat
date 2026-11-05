@@ -31,6 +31,17 @@ when it was observed and its confidence; the device drawer in the UI shows them,
 `seshat.enrichment.level` says how much the knowledge base contributed: `full` (known),
 `partial` (unknown, but some facts learned) or `none`.
 
+### Tracing an event
+
+Each event also says which source set each value it carries: `seshat.enrichment.fields` maps a field
+(`seshat.device.model`, `host.name`, ...) to an origin and `seshat.enrichment.origins` names the
+origin, for the knowledge base the source of the record (`manual`, `inventory`, `snmp`, `pack`,
+`learned`, `dns`), the connector behind an inventory or DNS source (`netbox`, `nautobot`, `csv`,
+`http`, `dns`) and when it was observed. It is the record's per-field provenance as it stood when the
+event was enriched, so it stays true after the record changes. The console's **Inspect** page shows it
+beside the original message and the enriched document, with a link to the device record;
+`docs/inspector.md` has the details and `deploy/dashboards` the saved searches for the data store.
+
 ## Unknown, stale, and what the hot path does
 
 * **Unknown.** The first event from an unseen (site, VRF, address) creates a small *stub* record
@@ -91,6 +102,10 @@ Token authentication (`Authorization: Token ...`; a read-only token is enough).
   `GET /api/dcim/devices/<id>/` (or `/api/virtualization/virtual-machines/<id>/`) supplies name,
   manufacturer (vendor), device type (model), platform (OS), serial, role, tenant, site, location,
   tags and custom fields, and `GET /api/dcim/interfaces/?device_id=<id>` the interfaces.
+  The device's **time zone** is the `time_zone` of its site (`GET /api/dcim/sites/?slug=<site>`,
+  remembered for ten minutes per site); a site with no zone, or one that cannot be read, leaves the
+  device's zone empty and changes nothing else. The syslog input uses it for timestamps that carry
+  no zone (see the syslog input doc).
 * **ifIndex.** NetBox does not model SNMP ifIndex. Create an interface custom field (default name
   `ifindex`, configurable) and fill it; interfaces without it are skipped, and interface names
   then come from the opt-in SNMP poll instead.
@@ -127,7 +142,8 @@ A path on the server (for example a file in the data volume). Header row require
 order, names case-insensitive, unknown columns ignored:
 
 `ip` (required; several separated by `;` or spaces), `name`, `hostname`, `vendor`, `model`, `os`,
-`os_version`, `serial`, `site`, `vrf`, `role`, `tenant`, `location`, `tags` (`;` separated), `mac`
+`os_version`, `serial`, `site`, `vrf`, `role`, `tenant`, `location`, `time_zone` (an IANA name such as
+`America/Los_Angeles`; an unknown name is ignored), `tags` (`;` separated), `mac`
 (`;` separated), `engine_id`, `custom.<key>` (any number).
 
 The file is re-read within a second of its modification time or size changing; a broken edit keeps
@@ -165,6 +181,15 @@ Why it is off: it makes Seshat *originate* traffic toward devices on the strengt
 merely seen on the wire, which is something you should choose per site, and it needs credentials
 you may not want on a collector. Leave it off where an inventory connector already supplies names,
 and turn it on where it is the only source of interface names.
+
+### From an edge
+
+For an address in a scope an [edge owns](edge.md#polling-on-the-edge) (the site setting of the Device Tracker names the
+edge, or the device's own setting does) the lookup is made by the edge, from its network: the server sends the request
+over the edge's control channel and stores the facts that come back as source `snmp`, exactly as for a lookup it made
+itself. The edge reads the same OIDs, applies the rules below before a datagram leaves (and its own ceiling and allow-list),
+takes the same per-device budget as its other SNMP requests, and uses the profile of its site (or `*`). If the edge is
+offline the lookup fails and is tried again later; the server does not make it in the edge's place.
 
 ### Where polling is allowed to go
 
@@ -254,6 +279,29 @@ the same host, the name moves to the first slot. At most 64 flow exporter ids
 (`<address>/<observation domain>`) are kept, newest first. A hostname longer than 253 bytes is ignored
 and other learned identity strings are clipped to 256 bytes, so the cost of every update stays flat
 however many names one sender invents.
+
+**Relays and rotating senders.** A device announces its own host name; a syslog relay, a
+load-balanced or NATed sender or a flapping device announces many from one address. Learning every
+new name would rewrite and re-index the device record for nearly every event, so a record takes new
+names heard in traffic from a rate limit: three names at once, then one more per 30 seconds
+(tokens in a bucket). The first name that finds the bucket empty marks the sender a **relay** for
+10 minutes. While it lasts, the host names the sender announces that the record does not hold are
+not learned (nothing is queued, nothing is rewritten; the counter
+`seshat_kb_hostnames_suppressed_total` counts them), and every event keeps the `host.name` it
+carries: the knowledge base only fills `host.name` when the event has none. Other facts heard from
+the same address (sysName, engine id, exporter ids, pack hints) are still learned, and names given by
+an operator, an inventory connector, DNS, SNMP or a pack never pass through the limit. A device that
+is renamed learns its new name at once (the first three are free); one that changes names slowly
+(less than one per 30 seconds) never becomes a relay. A relay's record therefore keeps the first
+few names it was heard to use, not the newest ones. This is a deliberate change from earlier
+releases, where the newest eight learned names always won.
+
+The limits (3 names at once, one more per 30 seconds, a 10 minute hold) are built in; there is no
+environment variable or setting for them. The state lives in memory on each node and is not
+replicated: after a restart or a fail-over the node starts with a full bucket, so a relay gets one
+more burst of three names before it is recognised again. Records replicated between nodes merge
+their host names as a union (bounded by the list sizes above), so the names learned on different
+nodes end up on the same device record.
 
 Metrics: `seshat_kb_lookups_total{result=hit|stale|unknown|created|limited}`,
 `seshat_kb_devices{status=known|unknown|stale|ignored}`, `seshat_kb_learn_queue_depth`.

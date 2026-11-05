@@ -5,8 +5,8 @@
   "event": {
     "kind": "event",
     "category": ["network"],
-    "type": ["info"],
-    "action": "linkDown",
+    "type": ["change"],
+    "action": "interface-down",
     "dataset": "seshat.trap",
     "module": "seshat",
     "id": "01K7XEXAMPLE0TRAP00000001",
@@ -58,11 +58,47 @@
         "alias": "Room 214 jack J-214"
       }
     },
+    "interface": {
+      "index": 10114,
+      "state": "down"
+    },
     "enrichment": {
       "level": "full",
       "sources": ["inventory", "pack"],
       "kb_observed_at": "2026-10-12T13:55:00.000Z",
-      "backfilled": false
+      "backfilled": false,
+      "fields": {
+        "seshat.device.model": "kb:inventory:netbox",
+        "seshat.device.name": "kb:inventory:netbox",
+        "seshat.device.role": "kb:manual",
+        "seshat.device.vendor": "kb:inventory:netbox",
+        "seshat.trap.mib": "mib:IF-MIB",
+        "seshat.trap.name": "mib:IF-MIB",
+        "seshat.trap.vars": "mib:IF-MIB"
+      },
+      "origins": [
+        {
+          "id": "kb:inventory:netbox",
+          "kind": "kb",
+          "name": "netbox",
+          "source": "inventory",
+          "observed_at": "2026-10-12T13:55:00.000Z",
+          "confidence": 0.95
+        },
+        {
+          "id": "kb:manual",
+          "kind": "kb",
+          "name": "manual",
+          "source": "manual",
+          "observed_at": "2026-10-12T13:57:10.000Z",
+          "confidence": 1
+        },
+        {
+          "id": "mib:IF-MIB",
+          "kind": "mib",
+          "name": "IF-MIB"
+        }
+      ]
     },
     "trap": {
       "oid": "1.3.6.1.6.3.1.1.5.3",

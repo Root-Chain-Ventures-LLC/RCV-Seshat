@@ -8,6 +8,10 @@ Elasticsearch/OpenSearch, Kafka, Splunk, an existing NMS, files). It also keeps 
 look up a MAC address, IP address, hostname or user and see what the device is, where it is, where it has been,
 and how old every fact is.
 
+Each input can also ship a **passthrough stream** beside the enriched one: the original message, untouched, as fast
+as it arrives, joined to its enriched events by an id. The **event inspector** in the console shows a message's
+original, the enriched document sent to destinations, and where every enriched field came from.
+
 Two applications ship from here:
 
 - **Seshat**: the gateway and its web console.
@@ -16,8 +20,9 @@ Two applications ship from here:
 
 An **edge collector** (`seshat-edge`) forwards a remote site's traps, syslog and flows to the main server over
 an outbound connection. When an administrator turns it on, an edge can also carry an authorised application's
-TCP session to an allow-listed host on its network, or run on-demand SNMP reads there, without the remote
-site accepting any inbound connection.
+TCP session to an allow-listed host on its network, run on-demand SNMP reads there, poll the site's Device
+Tracker devices, or collect streaming telemetry (gNMI and JTI dial-in, Cisco MDT, Juniper and gNMI dial-out) from
+inside it, without the remote site accepting any inbound connection.
 
 **Integrations**: other applications connect as registered integration clients whose tokens carry only the
 capabilities they need (Device Tracker reads, bulk reads, event subscriptions with replay, edge relay, edge SNMP
@@ -44,7 +49,7 @@ Each release carries the install artifacts and nothing else (the release notes a
 |---|---|
 | `seshat`, `seshat-device-tracker`, `seshat-edge` as `.deb` and `.rpm` | Linux packages for amd64 and arm64 with systemd units |
 | `seshat_<version>_linux_<arch>.tar.gz` | static binaries and the built-in vendor packs |
-| `seshat-appliance_<version>_amd64.qcow2`, `seshat-appliance_<version>_amd64.ova` | the virtual appliance: a ready-to-run Debian-based VM disk for KVM / Proxmox (qcow2) and VMware / VirtualBox / Proxmox import (OVA); see [`docs/packaging.md`](docs/packaging.md) |
+| `seshat-appliance_<version>_amd64.qcow2`, `seshat-appliance_<version>_amd64.ova` | the virtual appliance: a ready-to-run Debian-based VM disk for KVM / Proxmox (qcow2) and VMware / VirtualBox / Proxmox import (OVA); boots with BIOS or UEFI, Secure Boot on or off; see [`docs/packaging.md`](docs/packaging.md) |
 | `install-bundle.tar.gz` | the compose files, `.env.example`, systemd units and drop-ins |
 | `SHA256SUMS`, `SHA256SUMS.sig`, `cosign.pub` | checksums, their signature and the public key |
 | `*.spdx.json` | software bills of materials for the source tree and both images |
@@ -168,8 +173,9 @@ Read [`docs/hardening.md`](docs/hardening.md), "Upgrading", before a version jum
 
 [`docs/README.md`](docs/README.md) indexes everything: deploying safely, the inputs (SNMP, syslog, flows,
 streaming telemetry), routing and outputs, the device knowledge base, the Device Tracker, edge collectors
-(including the relay and SNMP reads), integrations, high availability, storage, and the event schema. Index templates, a Logstash input and PostgreSQL roles for the
-output side are in [`deploy/`](deploy).
+(including the relay, SNMP reads, polling and telemetry), the passthrough stream, the event inspector,
+integrations, high availability, storage, and the event schema. Index templates, OpenSearch Dashboards / Kibana
+saved objects, a Logstash input and PostgreSQL roles for the output side are in [`deploy/`](deploy).
 
 ## Reporting problems
 

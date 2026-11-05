@@ -18,7 +18,9 @@ slow, stuck or full destination never delays another.**
 
 ## Routes
 
-A route is `name`, `enabled`, `priority`, `match`, `stop` and `destinations`. An event is copied to the
+A route is `name`, `enabled`, `priority`, `match`, `stop`, `stream` and `destinations`. `stream` is `enriched` (the
+default) or `passthrough` and decides which events the route sees; see
+[The passthrough stream](#the-passthrough-stream). An event is copied to the
 destinations of **every** enabled route it matches (once per destination, even if several routes
 name it). Routes are evaluated in priority order (lower first, then by name); `stop: true` ends
 evaluation after that route matches.
@@ -104,7 +106,7 @@ A destination has a `type` and the following common settings. Names are lower-ca
 | `format` | `ecs-json` (default), `raw`, `syslog-5424`, `cef`, `leef`, `template` |
 | `template` | a Go `text/template` over the event as nested maps (`{{.host.name}}`, `{{.seshat.trap.name}}`, `{{._brand.org_name}}`, functions `json upper lower join`). On `elasticsearch`/OpenSearch and `beats` destinations every interpolated string is escaped for the inside of a JSON string (quote, backslash, control characters, line and paragraph separators), `{{json .x}}` still emits a complete quoted value, and the output must be exactly one JSON object: it is compacted to one line, and anything else (a second object, trailing text, an unquoted raw value that is not JSON) is a render error, the event is counted `rejected` with the reason in `last_error` and is never sent. Other destination types receive the template output exactly as written |
 | `fields.include` / `fields.exclude` | dotted field paths to keep or drop (ecs-json and template). `@timestamp` is always kept. `seshat.route` is only present when an include list names it |
-| `format_options` | `facility` (0-23, default 16), `app_name` (default `seshat`), `pen` (see syslog), `enrich` (`snmp_trap` and `syslog_relay` only, see NMS forwarding) |
+| `format_options` | `facility` (0-23, default 16), `app_name` (default `seshat`), `pen` (see syslog), `enrich` (`snmp_trap` and `syslog_relay` only, see NMS forwarding), `provenance` (`compact` keeps `seshat.enrichment.fields` and `seshat.enrichment.origins` in ecs-json and template documents; `off` leaves them out to save bytes. New destinations default to `compact`; destinations that existed at the upgrade that introduced it were set to `off` once so their documents did not change; see `docs/inspector.md`) |
 | `batching` | `max_events` (500), `max_bytes` (4 MiB), `max_wait` (`1s`), `low_latency` (send as soon as an event is available) |
 | `overflow` | `spill` (default), `drop_oldest`, `backpressure`; see below |
 | `queue` | `max_bytes` (1 GiB, 0 = unbounded), `segment_bytes` (8 MiB), `fsync` (`interval` default, `always`, `never`) |
@@ -184,10 +186,17 @@ Every destination owns a disk queue, bounded by `queue.max_bytes`. What happens 
 |---|---|
 | `spill` (default) | everything already queued is kept; new events for this destination are refused and counted (`dropped`). The disk is the buffer while the remote is down. |
 | `drop_oldest` | the oldest segment is deleted to make room, so the newest data survives. Counted as `dropped`. |
-| `backpressure` | the destination stops draining its in-memory intake (32768 events); when that fills, new events for **this destination only** are refused (`dropped`) and `/api/destinations/{id}/status` shows `backpressure: true`. Inputs and other destinations are untouched. |
+| `backpressure` | the destination stops draining its in-memory intake (see below); when that fills, new events for **this destination only** are refused (`dropped`) and `/api/destinations/{id}/status` shows `backpressure: true`. Inputs and other destinations are untouched. |
 
-Between the router and the queue sits an in-memory intake of 32768 events per destination. A burst
-larger than that while the disk cannot keep up is dropped for that destination and counted.
+Between the router and the queue sits an in-memory intake per destination, in one of two shapes.
+A destination that sends the document's own JSON (`ecs-json` without a field filter or wrapper)
+renders each event on the goroutine that received it and buffers the rendered records: at most 16384
+records and at most `SESHAT_OUTPUT_INTAKE_MB` (default 64) MiB of record buffers, so the worst case is
+64 MiB per destination whatever the record size. Every other format (template, filtered or wrapped
+JSON, syslog, CEF, LEEF, Splunk HEC, raw, the SNMP formats) buffers up to 32768 events and renders
+them in batches on the destination's own goroutine. A burst larger than the intake while the disk
+cannot keep up is dropped for that destination and counted (`dropped`); a destination whose intake is
+full refuses new events without spending any CPU on them.
 
 ### The queue directory
 
@@ -276,6 +285,16 @@ action such as a delete for another index.
 
 Same type; point it at OpenSearch and use `deploy/opensearch` templates.
 
+**Seeing the original next to the enriched document.** `deploy/dashboards` ships saved objects for
+OpenSearch Dashboards 2.x (`opensearch-dashboards.ndjson`) and Kibana 8.x (`kibana.ndjson`): index
+patterns for `logs-seshat.*` and `logs-seshat.device-*`, and saved searches that show `event.original`
+next to the enriched `seshat.device.*` fields, the provenance fields (`seshat.enrichment.fields`,
+`seshat.enrichment.origins`) and the per-field provenance of device records (route the `seshat.device`
+dataset to the store for that one). Import them under Dashboards Management, Saved objects (OpenSearch
+Dashboards) or Stack Management, Saved Objects (Kibana), or with the saved objects import API; see
+`deploy/dashboards/README.md`. `event.original` is stored but not indexed: Discover shows it, search
+`message` instead.
+
 ```json
 {"name": "os-main", "type": "elasticsearch", "enabled": true,
  "settings": {"urls": ["https://os.example.com:9200"], "auth": "basic", "username": "seshat"},
@@ -319,7 +338,16 @@ UDP, TCP or TLS. TCP/TLS use octet counting (RFC 6587) by default, `"framing": "
 receivers that need it. UDP sends one datagram per message and rejects (counts) messages over 65507
 bytes instead of truncating them.
 
-One event is one log line: CR, LF and NUL inside a message are sent as the text `\r`, `\n` and
+With `"content": "raw"` (format `raw`) the destination is a **relay**: it sends the original message of each
+event byte for byte, with no syslog header and no escaping, over UDP, TCP or TLS. Over TCP and TLS the framing must be `octet` (RFC 6587 octet counting, the default): the
+destination is refused at configuration time with `newline`, because a message that holds a line break
+(`<14>x` LF `<10>forged`) would reach the collector as two messages, the second one chosen by whoever sent the
+first. A message larger than a UDP datagram can carry (65507 bytes) is rejected and counted when relayed over UDP,
+never truncated. A `syslog` relay carries syslog only: messages of the trap and flow inputs are skipped (counted as
+`skipped`). Use it for the passthrough stream below, or for the original line of an enriched event. `raw_relay`
+does the same over UDP, TCP and TLS, and can also preserve the source address.
+
+Otherwise, one event is one log line: CR, LF and NUL inside a message are sent as the text `\r`, `\n` and
 `\x00`, so a sender-supplied message cannot become several log lines at the collector. The setting
 `"keep_newlines": true` sends CR and LF unchanged; it is only accepted with `protocol` `tcp` or `tls`
 and octet framing (the length prefix delimits the message), and NUL is still escaped. The same
@@ -347,6 +375,13 @@ files are named `<stem>-<UTC timestamp>.ndjson`, optionally gzipped, and `max_fi
 `file_mode` is the permission of the files (octal string, default `"0640"`: owner read/write, group read, so a
 log shipper in the group can collect them; `"0600"` keeps them private). The process umask is 077, so this
 setting, not the umask, decides; directories the output creates get the matching search bits (0750 for 0640).
+
+With `"content": "raw"` the file holds the original messages, one per line, losslessly. `"raw_encoding"` chooses how:
+`escaped` (the default) keeps valid UTF-8 as it is and writes the backslash, line feed, carriage return and NUL as
+`\\`, `\n`, `\r` and `\0`, and every other control byte (and every byte that is not valid UTF-8) as `\xHH` with
+two hex digits, so a syslog file stays readable and exactly reversible with those five escapes; `base64` writes the
+standard base64 of each message, which is the choice for binary trap PDUs and flow datagrams. No message can ever
+span two lines or forge another.
 
 A record is always exactly one line: CR, LF and NUL inside a rendered event (a `syslog-5424`, `cef`,
 `leef` or `template` body) are written as the text `\r`, `\n` and `\x00`. A template that writes
@@ -384,12 +419,13 @@ other 4xx discard the batch (`rejected`).
 
 ### Raw relay (`raw_relay`)
 
-Forwards the original datagram of each event byte for byte (content and format `raw`) to a UDP or
-TCP target. It works for every input that keeps the datagram on the event: traps and informs, syslog
+Forwards the original datagram of each event byte for byte (content and format `raw`) to a UDP, TCP or TLS
+target (`"protocol": "tls"`, with the same `tls` block and `tls_key` secret as the `syslog` destination;
+`preserve_source` is UDP only). It works for every input that keeps the datagram on the event: traps and informs, syslog
 (a UDP datagram, or one line or frame of a TCP/TLS stream) and, once the flow input lands, flow
-datagrams. TCP can add `newline` or `octet` framing; the datagram is never altered, so with `newline`
-framing a datagram that contains a line break is split there (use `octet` for binary or multi-line
-datagrams). By default the datagram leaves from Seshat's
+datagrams. TCP and TLS can add `newline` or `octet` framing; the datagram is never altered, and with
+`newline` framing a datagram that contains a line break is **refused and counted as rejected** instead of being
+split into several messages at the receiver (use `octet` for binary or multi-line datagrams). By default the datagram leaves from Seshat's
 own address; `preserve_source` changes that, see mode 1 below. Details in "NMS forwarding".
 
 ### Metric destinations (`prometheus_remote_write`, `influx_line`, `otlp_metrics`)
@@ -410,8 +446,28 @@ site). A path label that is itself called `host`, `site` or `source` is renamed 
 | Type | Wire format | Settings |
 |---|---|---|
 | `prometheus_remote_write` | Remote-write 1.0: a snappy-compressed `WriteRequest` protobuf, `Content-Encoding: snappy`, `X-Prometheus-Remote-Write-Version: 0.1.0`. Metric name = `metric_prefix` (default `seshat_`) + the path without keys, non-alphanumerics as `_` (`seshat_interfaces_interface_state_counters_in_octets`). Booleans are 0/1. Samples of one series are sent in time order in one `TimeSeries`. | `url`, `username` + `password` secret (basic) **or** `token` secret (bearer), `headers` (e.g. `X-Scope-OrgID`), `metric_prefix`, `timeout`, TLS |
-| `influx_line` | Line protocol. Measurement = `measurement_prefix` + the path without keys and without the leaf (`interfaces/interface/state/counters`); tags = labels, `host`, `site`, `source`; fields = the leaves sharing measurement, tags and timestamp (`in-octets=1843200u,out-octets=99u`): `i` integers, `u` unsigned, floats, booleans, strings quoted. Escaping follows the InfluxDB line-protocol reference: commas and spaces in the measurement, commas, equals signs and spaces in tag keys, tag values and field keys, and quotes and backslashes in string values; a backslash elsewhere is written as is. Line protocol cannot express a name or value that ends in a backslash, so trailing backslashes are dropped, and a line break is sent as a space; an empty tag key or value is omitted. The encoder is tested against the official InfluxData line-protocol parser. | `mode` `http` (default) or `udp`; HTTP: `url` and `bucket` (+ `org`, `token` secret) for InfluxDB 2 `/api/v2/write`, or `database` (+ `username`, `password` secret) for InfluxDB 1 `/write`; `precision` `ns` (default), `us`, `ms`, `s`; UDP: `address`, `max_packet` (default 1400, datagrams are filled with whole lines); `measurement_prefix`, `timeout`, TLS |
+| `influx_line` | Line protocol. Measurement = `measurement_prefix` + the path without keys and without the leaf (`interfaces/interface/state/counters`); tags = labels, `host`, `site`, `source`; fields = the leaves sharing measurement, tags and timestamp (`in-octets=1843200i,out-octets=99i`): integers `i`, floats, booleans, strings quoted (see *Influx field types* below). Escaping follows the InfluxDB line-protocol reference: commas and spaces in the measurement, commas, equals signs and spaces in tag keys, tag values and field keys, and quotes and backslashes in string values; a backslash elsewhere is written as is. Line protocol cannot express a name or value that ends in a backslash, so trailing backslashes are dropped, and a line break is sent as a space; an empty tag key or value is omitted. The encoder is tested against the official InfluxData line-protocol parser. | `mode` `http` (default) or `udp`; HTTP: `url` and `bucket` (+ `org`, `token` secret) for InfluxDB 2 `/api/v2/write`, or `database` (+ `username`, `password` secret) for InfluxDB 1 `/write`; `precision` `ns` (default), `us`, `ms`, `s`; UDP: `address`, `max_packet` (default 1400, datagrams are filled with whole lines); `measurement_prefix`, `integer_fields` (`signed` default, `float`, `as_sent`; see below), `timeout`, TLS |
 | `otlp_metrics` | OTLP/HTTP protobuf `ExportMetricsServiceRequest` posted to `<url>/v1/metrics` (optionally gzip). One resource per device (`host.name`, `seshat.site`), one gauge per dotted path (`metric_prefix` + `interfaces.interface.state.counters.in-octets`), one data point per sample with the path labels as attributes; integers as `as_int`, the rest as `as_double`. | `url`, `username` + `password` or `token`, `headers`, `gzip`, `metric_prefix`, `timeout`, TLS |
+
+#### Influx field types
+
+InfluxDB fixes the type of a field (integer, unsigned, float, string, boolean) by the first write to its shard,
+and refuses a later write of another type (`422 field type conflict`). Streaming telemetry reports the same
+leaf with different integer types depending on how the sender encodes it: gNMI `JSON_IETF` as a signed
+integer, gNMI `PROTO`, Junos JTI and Cisco MDT as unsigned for a counter. Written as they came, two sources
+of one leaf in one bucket are refused. The `integer_fields` setting makes the type depend on the leaf, not on
+the sender:
+
+| `integer_fields` | Integers | Notes |
+|---|---|---|
+| `signed` (default) | always signed: `in-octets=1843200i`, from int64 and uint64 alike | exact for every value up to 9223372036854775807. An unsigned value above that cannot be a signed integer; it is left out and counted rather than written as a float, which would give the field a second type. The count is `skipped_out_of_range` in the sender stats and `seshat_output_sender_total{dest,counter="skipped_out_of_range"}`, and one warning a minute is logged with the path |
+| `float` | written as floats (Go's shortest form, so `1.8432e+06` for 1843200) | one type for a leaf that a sender sometimes writes as a whole number and sometimes as a fraction (JSON `1` and `1.5`); exact only up to 2^53 (9007199254740992) |
+| `as_sent` | the type the source reported: `1843200i` or `1843200u` | the behaviour before this setting existed, for a bucket that already holds unsigned fields. Two encodings of one leaf conflict |
+
+Booleans, strings and floats are written as they are in every mode. A destination created before the setting existed is stored with `as_sent` when the gateway first starts after the upgrade (so the types of the data already in its bucket do not change under it); a new destination, or one saved with the setting, has the value it names, `signed` by default. When InfluxDB does refuse a batch with `422 field type conflict`, the batch is rejected for good (a 4xx other than 408, 425 and 429 is permanent: retrying cannot help), counted per destination as `rejected` in `seshat_output_events_total{dest,result="rejected"}`, its samples counted as `rejected_field_type_conflict` in the sender stats and `seshat_output_sender_total`, shown as the destination's last error, and logged once a minute with InfluxDB's answer. Changing the setting on a bucket that
+already holds the other type conflicts until InfluxDB starts a new shard (by default a week), or use a new
+bucket or `measurement_prefix`. Floats that a source reports with no fraction are written as floats, so a leaf
+that one source reports as a whole-number float and another as an integer needs `float` too.
 
 Every sample is exported as an untyped gauge or a gauge data point: the telemetry stream does not
 say whether a leaf is a counter, so use `rate()` / `non_negative_derivative()` on the cumulative
@@ -615,6 +671,58 @@ at it, press Test on the Destinations page (it sends a synthetic documentation-r
 Check `snmpTrapAddress.0` is the sending device, and for mode 1 compare the packet's source address
 with `tcpdump` on the NMS side.
 
+## The passthrough stream
+
+An input can ship **two streams from the same traffic**: the usual enriched one, and a **passthrough** stream that is
+the original message, untouched, taken at the listener before anything is decoded. The record is defined in
+[`schema/passthrough.md`](schema/passthrough.md) (contract `seshat.passthrough`, version 1).
+
+1. **Switch it on per input**: *Inputs, Syslog / SNMP traps / Flows, Passthrough* in the UI, or `"passthrough": true` in
+   `PUT /api/inputs/syslog`, `PUT /api/inputs/snmp` (the `config` object) and `PUT /api/inputs/flow`. It is off by
+   default, applies at once, and costs nothing while off.
+2. **Route it**: create a route with `"stream": "passthrough"` and the destinations that should get it. Passthrough
+   routes only see passthrough records and enriched routes never do, so existing routes keep their meaning. Send raw
+   to one place and enriched to another, or both to the same destination (they then share its queue). The match
+   expression can use the envelope fields (`seshat.source.input`, `.listener`, `.protocol`, `.ip`, `.port`, `.site`,
+   `.vrf`, `.edge`, `event.dataset`).
+3. **Choose how it is carried**, per destination:
+
+| Destination | Setting | What arrives |
+|---|---|---|
+| `syslog` (UDP, TCP or TLS) | `"content": "raw"` | the original bytes, one message at a time, with only the octet-counting prefix added (syslog input only) |
+| `raw_relay` (UDP, TCP or TLS) | the default | the original bytes; `preserve_source` (UDP) sends them with the device's own address |
+| `file` | `"content": "raw"`, `"raw_encoding": "escaped"` or `"base64"` | one message per line, reversibly encoded |
+| `elasticsearch` / OpenSearch, `beats` (Logstash), `kafka`, `splunk_hec`, `webhook`, `file` | `ecs-json` (the default) | the envelope as JSON with the original in `event.original` (text, or base64 when `seshat.passthrough.encoding` says so) |
+| any of the above with a `template` | `"format": "template"` | your template over the same envelope |
+
+   A destination that gets both streams shares one queue, intake and sender between them; the route list shows a
+   warning, and `seshat_output_events_total` has a `stream` label. Prefer a destination of its own for the stream.
+
+   Data stream: `logs-seshat.passthrough-<namespace>`, with its own index template under `deploy/`. A route to a
+   destination that renders parsed fields (CEF, LEEF, RFC 5424 built from the event, `snmp_trap`, `syslog_relay`, the
+   metric destinations) is refused and shown as a problem on `GET /api/routes`; nothing is sent there.
+4. **Join** the streams with `event.id` of the passthrough record and `seshat.source.passthrough_id` of the enriched
+   events from the same message.
+
+The tap does no decoding, grammar match, knowledge-base lookup, enrichment or route-table scan beyond the passthrough
+routes; it copies each message once and queues it per destination exactly like any other event. The source allow-list
+applies; the input's rate limits do not (they protect the decode path). The stream has bounds of its own, applied
+before a record is allocated: it is idle (and the message is not copied for it) while no passthrough route has a
+running destination, a message is refused when every passthrough destination's intake is full, and the input's
+`passthrough_max_eps` (records per second, 0 = 250000) caps what it can produce; refusals are counted
+(`passthrough.dropped`, `seshat_passthrough_dropped_total`). Isolation is structural: the enriched path
+never waits for the passthrough stream and the other way round, and every destination has its own bounded intake and
+disk queue with its own overflow policy (`spill`, `drop_oldest` or `backpressure`; `drop_oldest` or `spill` is the
+right choice for a stream that must never push back on a listener, and a refused record is counted in
+`seshat_output_events_total{result="dropped"}`).
+
+Monitoring: `seshat_passthrough_records_total{input}`, `seshat_passthrough_enabled{input}`,
+`seshat_passthrough_routed{input}` and `seshat_passthrough_dropped_total{input,reason}` count and show the taps; `seshat_passthrough_unrouted_total` counts records that matched no passthrough route with a destination (turning
+passthrough on without a route is visible here, and not in `seshat_route_unrouted_total`). The input status APIs show
+`passthrough.enabled` and `passthrough.emitted`.
+
+Through an edge, see [the edge guide](edge.md#the-passthrough-stream-through-an-edge).
+
 ## Shared message bus (optional)
 
 By default a replica delivers only what it received, from its own disk queue: if
@@ -755,7 +863,7 @@ Per destination (`dest` label):
 
 | Metric | Meaning |
 |---|---|
-| `seshat_output_events_total{dest,result}` | `sent`, `failed` (events in an attempt that failed; they are retried), `dropped` (overflow, intake full), `rejected` (refused for good), `skipped` (no original datagram for a raw destination), `paused` (arrived while drained) |
+| `seshat_output_events_total{dest,stream,result}` | `stream` is `enriched`, `passthrough` or `unattributed` (records evicted from a full queue to make room, which belong to either); `sent`, `failed` (events in an attempt that failed; they are retried), `dropped` (overflow, intake full), `rejected` (refused for good), `skipped` (no original datagram for a raw destination), `paused` (arrived while drained) |
 | `seshat_output_queue_depth{dest}` | events waiting |
 | `seshat_output_queue_bytes{dest}` | bytes waiting |
 | `seshat_output_lag_seconds{dest}` | age of the oldest undelivered event (0 when empty) |
@@ -763,7 +871,8 @@ Per destination (`dest` label):
 | `seshat_output_blocked{dest}` | 1 while a standing condition stops delivery until someone acts (no `CAP_NET_RAW` for `preserve_source`, enrichment without an enterprise number) |
 | `seshat_output_sender_total{dest,counter}` | counters an output type keeps itself; `snmp_trap`: `traps_sent`, `informs_acked`, `informs_unacked`, `send_errors`, `rate_limited`, `skipped` |
 
-Also `seshat_route_unrouted_total`, `seshat_route_matched_total{route}` and
+Also `seshat_route_unrouted_total`, `seshat_passthrough_unrouted_total`, `seshat_passthrough_records_total{input}`,
+`seshat_passthrough_enabled{input}`, `seshat_route_matched_total{route}` and
 `seshat_output_destinations{state}`. `GET /api/ready` includes `"outputs": "configured=N healthy=M"` (for an administrator, an operator, a viewer or the metrics token)
 and never fails readiness because a destination is down. A destination's state is `healthy`,
 `degraded` (a failed attempt, a full queue or backpressure), `failing` (three or more consecutive
@@ -776,9 +885,9 @@ Administrators write, operators and viewers read, users get 403.
 | Method and path | |
 |---|---|
 | `GET /api/outputs/meta` | option lists for the editors |
-| `GET/POST /api/routes`, `GET/PUT/DELETE /api/routes/{id}` | route table |
+| `GET/POST /api/routes`, `GET/PUT/DELETE /api/routes/{id}` | route table. `PUT` changes the fields the body names and keeps the rest (a body of `{"match": "..."}` leaves `enabled`, `priority`, `stream` and `destinations` alone); send a field with its empty value to clear it. Nothing is applied when the result is invalid |
 | `POST /api/routes/dry-run` | `{"event": {...}, "match": "optional expression"}` |
-| `GET/POST /api/destinations`, `GET/PUT/DELETE /api/destinations/{id}` | destinations (with live status) |
+| `GET/POST /api/destinations`, `GET/PUT/DELETE /api/destinations/{id}` | destinations (with live status). `PUT` also keeps what the body omits (`{"enabled": false}` pauses the destination and changes nothing else; blocks such as `batching` merge member by member, `settings` is replaced whole when named, stored secrets are kept unless named) |
 | `POST /api/destinations/{id}/test` | send one synthetic event straight to the destination; returns `ok`, `latency_ms`, `error` |
 | `GET /api/destinations/{id}/status` | queue depth and bytes, lag, last success, last error, counters |
 | `POST /api/destinations/{id}/drain?timeout_seconds=30` | stop intake and wait for the queue to flush; events arriving meanwhile are counted as `paused` |

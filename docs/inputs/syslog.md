@@ -19,7 +19,7 @@ development).
 
 The roles `all`, `collector` and `edge` start the listeners; `console` does not.
 
-The operator-editable part (allow-list, rate limits, connection limits, idle timeout, time zone,
+The operator-editable part (allow-list, rate limits, connection limits, idle timeout, time zones,
 client-certificate policy and the listen addresses) lives in **Inputs, Syslog input** and in
 `GET/PUT /api/inputs/syslog` (admin to change, operator or viewer to read). Everything applies immediately
 except the three listen addresses, which apply at the next start (`restart_required` is shown
@@ -27,6 +27,24 @@ meanwhile). Environment values are the defaults until the settings are saved onc
 
 `/api/ready` reports each enabled listener to an administrator, an operator, a viewer or the metrics token (anonymous callers get only the verdict); it answers 503 while one is down (for example the TLS
 listener without a readable certificate; the bind is retried every 10 s).
+
+## Passthrough: the original line, untouched
+
+**Inputs, Syslog input, Passthrough** (`"passthrough": true` in `PUT /api/inputs/syslog`) ships every message
+exactly as read as its own stream, beside the enriched events: a UDP datagram as received, or one message of a TCP or TLS
+stream with only the framing delimiter taken off (a newline-framed line without its one terminating line feed, so a
+carriage return before it stays; the counted bytes of an octet-counted frame, trailing line break included). The
+enriched path still trims trailing CR, LF and NUL from the line it parses. It is taken right after the socket read and
+the source allow-list, before the rate limits, the parser, the grammars and enrichment, so even a line that does not
+parse, or that holds invalid UTF-8, NUL or other odd bytes, is kept byte for byte. Off by default; `passthrough.enabled`,
+`passthrough.routed`, `passthrough.emitted` and `passthrough.dropped` are in `GET /api/inputs/syslog`. The stream is
+bounded by `passthrough_max_eps` (records per second, 0 = 250000) and idles while no passthrough route has a destination.
+
+Route it with a route whose `stream` is `passthrough` (see [Routing and outputs](../outputs.md#the-passthrough-stream)):
+a `syslog` destination with `"content": "raw"` forwards the line unchanged to another collector over UDP, TCP or TLS;
+JSON destinations carry it in `event.original`, as text when it is plain text and as base64 otherwise. The enriched
+event of the same line carries the record's id in `seshat.source.passthrough_id`. The record is defined in
+[the passthrough contract](../schema/passthrough.md).
 
 ## Framing
 
@@ -77,13 +95,92 @@ leaves the connection, the other connections and the listeners running.
 `event.created` is the receive time. `@timestamp` is the device time when present and plausible
 (not more than a day ahead and not older than a year), otherwise the receive time.
 
-### Time zone assumption
+### Time zones
 
-RFC 3164 timestamps carry neither zone nor year. The year is inferred from the receive time (a
-date more than a day in the future belongs to the previous year). The zone is `UTC` unless
-`SESHAT_SYSLOG_ASSUME_TZ` (or the setting of the same name in the UI) names an IANA zone such as
-`Europe/Berlin` or a fixed offset such as `+02:00`. RFC 5424 and ISO 8601 timestamps carry their own
-offset and ignore this setting.
+RFC 3164 timestamps carry neither zone nor year, and so do ISO 8601 timestamps written without an
+offset. RFC 5424 timestamps and ISO 8601 timestamps with an offset carry their own zone and are
+**never** overridden: `event.timezone` is absent on them.
+
+For a timestamp without a zone Seshat picks the zone of the sender, first match wins:
+
+1. **Address rule** of the input (`time_zones` with an address or a CIDR prefix): an exact address
+   beats any prefix, a longer prefix beats a shorter one.
+2. **Device record** (`time_zone` of the device in the knowledge base, found by the sender's address):
+   set by hand when you adopt a device, filled from the NetBox connector (the `time_zone` of the
+   device's site), or a `time_zone` column of a CSV or HTTP connector.
+3. **Hostname**, only when the sender's address is neither named by a rule nor owned by a *known*
+   device (inventory or operator entered; a stub the gateway made for an address it saw does not
+   count): a hostname rule of the input (`time_zones` with the name in the message header, exact or
+   `*.example.com`), then the device record that carries that name. This is for traffic that arrives
+   through a relay, where every sender has the relay's address.
+4. **Site** (`site_time_zones`): the zone listed for the device's inventory site, or for the input's own
+   site when the device is not in the inventory (an untagged input is the site `default`). Names are
+   compared without regard to case.
+5. **`assume_tz`** (`SESHAT_SYSLOG_ASSUME_TZ`), default `UTC`; or `auto`, below.
+
+An explicit rule outranks the device record on purpose: it is the operator's override for a device
+whose inventory entry is wrong. All lookups are reads of tables held in memory; changing the rules
+takes effect at once, and a zone name is loaded once and then served from memory.
+
+**The hostname in the header is written by the sender.** That is why step 3 exists only for
+addresses nothing knows: a device with a rule or an inventory record keeps its own zone whatever
+name it writes, so it cannot borrow another device's zone by claiming its name. What a stranger can
+do with a claimed name is limited to its own events, and their timestamps still have to be plausible
+(not more than a day ahead of the receive time, nor more than a year old) to be used as `@timestamp`.
+A relay that is itself a known device in the inventory therefore gets no hostname rules: leave the
+relay out of the inventory (or out of the zone-bearing part of it).
+
+Prefer IANA names (`America/Los_Angeles`) over offsets (`-08:00`): a name follows the daylight saving
+changes, an offset does not. The reading is converted with the rules of that day. When the clocks
+go back, an hour occurs twice (01:30 on the day of the change); Seshat takes the occurrence closest
+to the receive time. A reading that does not exist (02:30 on the day the clocks go forward) is moved
+forward by the length of the gap. The year is inferred from the receive time in the sender's zone: a
+date more than a day in the future belongs to the previous year (a December line seen in January), and
+a reading more than 364 days old whose next-year reading is at most a day ahead belongs to the next
+year (a January line from a clock slightly ahead of the receiver, seen in December). Both use the same
+one-day tolerance for a clock that runs ahead; anywhere else the past reading wins, so a replayed old
+line keeps its year.
+
+Every event whose timestamp needed a zone carries it: `event.timezone` (the zone applied, for example
+`America/Los_Angeles`) and `seshat.syslog.timezone_source` (`rule`, `device`, `site`, `assume_tz`, or
+`auto`), next to `event.original` (the line as received) and `event.created` (the receive time).
+Compare `@timestamp` with `event.created` to spot a device whose clock is wrong.
+
+### `assume_tz: auto`
+
+Set `assume_tz` to `auto` (opt-in; setting or `SESHAT_SYSLOG_ASSUME_TZ=auto`) to have Seshat learn the
+offset of every sender that no rule, device record or site gives a zone. The wall clock a zone-less
+timestamp shows, read as UTC, minus the receive time is the sender's offset from UTC (plus a little
+drift and transit delay); rounded to 15 minutes it is the offset to apply. One message proves
+nothing (a relay replaying a backlog looks like a clock in another zone), so an offset is adopted only
+after it has been seen on 5 consecutive messages spread over at least a minute, and a learned offset
+is replaced only by another that meets the same bar, so a daylight saving change is followed after about a
+minute of traffic and a stray message changes nothing. Offsets more than 14 hours from UTC are never
+learned. Until an offset is learned the sender is read as UTC, with `seshat.syslog.timezone_source`
+`assume_tz`; once learned it is `auto` and `event.timezone` is the offset (`-08:00`). Learning is per
+sender address, so it does not suit a relay that forwards several zones (use hostname rules). The
+learned offsets are kept in memory (at most 16384 senders, forgotten after a day without traffic) and
+are relearned after a restart. They are listed under `auto_tz` in `GET /api/inputs/syslog` (status):
+state, offset or candidate, message count and last seen per sender, so a clock that is simply wrong
+is shown instead of silently corrected.
+
+### Clock skew
+
+Every message whose device timestamp is at least a minute from the receive time is counted in
+`seshat_syslog_clock_skew_total{direction,bucket}`: `direction` is `ahead` or `behind` the receive time,
+`bucket` the largest of `1m`, `10m`, `1h`, `1d` that the skew reached. That is eight series in all,
+never one per sender. `seshat_syslog_clock_skew_senders` is the number of senders tracked as skewed
+and `seshat_syslog_clock_skew_untracked_total` the messages from senders the bounded table (1024) had no
+room for; they are still counted in the buckets. The status of the input (`counters.clock_skew` in `GET
+/api/inputs/syslog`) lists the 20 most skewed senders with their message count, last and largest skew and
+last seen; senders quiet for an hour drop out. A `1h` bucket that follows a UTC clock around is usually
+a zone that has not been applied; a `1d` bucket is a clock that is wrong.
+
+`time_zones` is a list of `{"match": "192.0.2.0/24", "tz": "America/Los_Angeles"}` and
+`site_time_zones` a list of `{"site": "example-site-a", "tz": "America/Chicago"}`, both in
+`GET/PUT /api/inputs/syslog` and in the Syslog input page (one rule per line). An unknown zone, a
+match that is neither an address, a prefix nor a hostname, and a duplicate are rejected with
+`invalid_settings`.
 
 ## Vendor grammars
 

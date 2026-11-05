@@ -145,6 +145,34 @@ Take a backup first, upgrade the server before the edges ([`hardening.md`](harde
 Your env files are kept: when the shipped example changed, apt asks or leaves it as `seshat.env.dpkg-dist`,
 rpm writes `seshat.env.rpmnew`. A running unit is restarted; migrations run on start (once per cluster).
 
+## Updating one component
+
+A release is one version number, but every part of an installation is its own artifact, so you can replace only the
+part you need. Take a backup first, and deploy the same release's artifact for whatever you update.
+
+| Install | Parts | Replace one |
+|---|---|---|
+| Docker Compose | `seshat` (image `seshat`), `device-tracker` (image `seshat-device-tracker`, `compose.portal.yaml`), `seshat-edge` (the `seshat` image started as an edge, `compose.edge.yaml`, normally on another host) | `docker compose pull <service> && docker compose up -d --no-deps <service>` with the same `-f` files you started with |
+| Helm | the server StatefulSet and the optional portal Deployment, one chart | `helm upgrade ... --set image.tag=<version>` or `--set portal.image.tag=<version>`; only workloads whose pod template changed restart, and the migration job runs first on every upgrade |
+| Packages | `seshat`, `seshat-device-tracker`, `seshat-edge` (three packages, three units) | `apt install ./<package>_<version>-1_<arch>.deb` or `dnf upgrade ./<package>.rpm`; a running unit is restarted, the others are untouched |
+| Appliance | the `seshat` package inside the VM | update the package as above; the image itself is replaced only to change the base system |
+
+**Order and version skew.** Update the server first (every replica), then the edges, then the Device Tracker portal.
+A server keeps serving edges and portals one release behind it; an edge or portal that is newer than its server is
+not supported. Within a cluster, update the nodes one after another (drain, update, wait until it is ready again).
+
+**Migrations.** The database schema is migrated automatically when the first updated replica starts (once per cluster;
+Helm runs it as a job before any pod restarts). Migrations only go forward and only add: a new column is nullable or has
+a default, and nothing is dropped or renamed in the release that stops using it. The previous release therefore keeps
+working against the new schema while replicas are being replaced. There is no downgrade of the schema: to go back,
+restore the backup you took before the update.
+
+**Changing data without a release.** Vendor packs are plain files that the inputs read when they start. Point
+`SESHAT_PACKS_DIR` at a directory of your own (a copy of the shipped packs plus yours, for example a mounted volume)
+and restart `seshat`; edges fetch the server's packs automatically. MIB files can be uploaded at any time on the
+Packs page (MIBs) and are compiled without a restart. Everything else you configure in the web interface (inputs,
+routes, destinations, templates, branding) is stored in the database and is never part of an update.
+
 ## Uninstall
 
 ```sh
@@ -187,8 +215,7 @@ a package on a server you maintain.
 | `seshat-appliance_<version>_amd64.ova` | VMware ESXi, Workstation and Fusion, VirtualBox, and Proxmox VE (`qm importovf`) |
 
 Both hold the same disk (8 GiB virtual size, about 270 MB to download; the system uses about 0.5 GiB of it until your
-data grows) and boot with BIOS or UEFI firmware, with **Secure Boot off**: the boot loader is an unsigned GRUB (no
-shim), so a firmware that enforces Secure Boot refuses it. They are listed in `SHA256SUMS` like every other asset: verify the
+data grows) and boot with BIOS or UEFI firmware, **with Secure Boot on or off** ([Secure Boot](#secure-boot) below). They are listed in `SHA256SUMS` like every other asset: verify the
 signature and the checksum first ([`hardening.md`](hardening.md), "Verifying a release").
 
 **What is in it.** A minimal Debian (no desktop, no compiler, no mail server), the `seshat` package, systemd-networkd
@@ -222,16 +249,25 @@ qm set 9000 --scsi0 local-lvm:vm-9000-disk-0 --boot order=scsi0
 qm start 9000
 ```
 
-Or the OVA: `qm importovf 9000 seshat-appliance_<version>_amd64.ova local-lvm`. For SSH keys and a fixed address use
-Proxmox's cloud-init drive (`qm set 9000 --ide2 local-lvm:cloudinit --ciuser admin --sshkeys keys.pub --ipconfig0
+For SSH keys and a fixed address use Proxmox's cloud-init drive on either VM
+(`qm set 9000 --ide2 local-lvm:cloudinit --ciuser admin --sshkeys keys.pub --ipconfig0
 ip=192.0.2.20/24,gw=192.0.2.1`); the appliance reads it like any NoCloud seed, and the keys go to the user you name
 with `--ciuser` (`admin` here).
 
-**Secure Boot.** Leave the VM on the default SeaBIOS firmware, or, for UEFI, turn Secure Boot off. Proxmox: with
-`--bios ovmf`, create the EFI disk without the pre-enrolled keys (`--efidisk0 local-lvm:1,efitype=4m,pre-enrolled-keys=0`),
-because OVMF's default keys enforce Secure Boot. Hyper-V generation 2: clear *Enable Secure Boot* in the VM's
-firmware settings. VMware: leave *Secure Boot* unchecked under *VM Options > Boot Options*. libvirt/QEMU: use an OVMF
-build without enrolled keys.
+**Proxmox VE and the OVA.** `qm importovf` reads the OVF descriptor, **not** the `.ova` file: unpack the archive
+first (the `.ovf` and the `.vmdk` must stay in the same directory), import the `.ovf`, and then add what Proxmox does
+not take from the OVF, a network adapter, the OS type and the guest agent:
+
+```sh
+tar -xf seshat-appliance_<version>_amd64.ova
+qm importovf 9001 seshat-appliance_<version>_amd64.ovf local-lvm
+qm set 9001 --net0 e1000,bridge=vmbr0 --ostype l26 --agent 1
+qm start 9001
+```
+
+The VM then runs on the controllers the OVA declares (LSI Logic SCSI disk, Intel E1000 adapter). Proxmox VE 8.2 and
+later can also import an OVA from the web UI: give a directory storage the *Import* content type, upload the `.ova`
+there and use *Import* on it; check the VM's *Hardware* afterwards and add the network adapter if it is missing.
 
 KVM with libvirt: `virt-install --name seshat --memory 2048 --vcpus 2 --import --disk
 path=seshat-appliance_<version>_amd64.qcow2,bus=virtio --network bridge=br0 --osinfo debian13 --graphics none`.
@@ -242,6 +278,50 @@ Intel E1000 network adapter, which every one of them offers; switch to paravirtu
 (the kernel has the drivers). The disk controllers tried at release time are virtio-blk, virtio-scsi and LSI Logic
 SCSI; SATA and NVMe drivers are in the initial RAM disk and are expected to work, but are not part of the release
 test.
+
+### Secure Boot
+
+The appliance boots with Secure Boot **on** under the default Microsoft keys, and with it off, on BIOS and UEFI
+firmware. It uses Debian's own signed boot chain: the firmware verifies `shim` (signed by the Microsoft UEFI CA),
+shim verifies Debian's signed GRUB, and GRUB loads Debian's signed kernel, which the kernel's lockdown mode
+then protects (only signed kernel modules load). The binaries are the ones Debian signed, from the same archive
+snapshot as the rest of the image (`/usr/share/seshat-appliance/packages.txt` lists them, and
+`/etc/seshat-appliance-release` names the snapshot); nothing in the image signs anything.
+
+* Proxmox VE: `--bios ovmf --machine q35` and an EFI disk **with** the pre-enrolled keys:
+  `qm set 9000 --bios ovmf --machine q35 --efidisk0 local-lvm:1,efitype=4m,pre-enrolled-keys=1`
+  (before the first start; `pre-enrolled-keys=0` leaves Secure Boot off and boots as well). The image has booted
+  with Secure Boot enforced on Proxmox VE 9.2 with `ms-cert=2023k` (Proxmox's option for firmware that carries the
+  Microsoft 2023 keys). With the default SeaBIOS firmware, none of this applies.
+* libvirt/QEMU: an OVMF build with the Microsoft keys enrolled (Debian's `OVMF_CODE_4M.secboot.fd` with
+  `OVMF_VARS_4M.ms.fd`); this is what the release's own boot test uses.
+* VMware (UEFI firmware, *Secure Boot* under *VM Options > Boot Options*) and Hyper-V generation 2 (the template
+  *Microsoft UEFI Certificate Authority*, not the Windows one, is the one that accepts a Linux shim): **not tested**;
+  they verify the same Microsoft-signed shim and should behave as above, but treat that as unverified; if the image does
+  not start there, turn Secure Boot off. The OVA declares BIOS firmware.
+* Firmware that holds only its own keys (custom or vendor-only key databases) will refuse the image: turn Secure
+  Boot off, or enrol the Microsoft UEFI CA.
+* Kernel modules you build yourself (DKMS) are unsigned and are refused under Secure Boot; sign them with a key
+  you enrol (MOK) or run with Secure Boot off.
+* **Boot loaders do not update in place.** The shim and GRUB on the EFI system partition are the versions that shipped
+  in the image (`packages.txt` names them and their SBAT generation); `apt` upgrades the kernel and the rest of the
+  system but does not rewrite that partition. Secure Boot is only as current as that copy: the firmware's revocation
+  list (DBX) and the SBAT levels it applies can be raised by firmware or OS updates, and an older shim or GRUB that
+  has been revoked then stops booting. The shim of this release carries signatures chaining to both Microsoft UEFI CAs, 2011 and 2023,
+  so firmware that trusts either accepts it; firmware that has had the 2011 certificate removed, or that
+  adds a revocation (DBX) entry for it, needs a newer shim than the one in an old image. Use the newest release, or
+  replace the contents of the image's EFI system partition from a newer one, if a firmware update starts refusing it.
+
+### Hypervisors this was tested on
+
+The release is booted in QEMU on every build (BIOS, UEFI with Secure Boot off and on, virtio-blk, virtio-scsi,
+LSI Logic SCSI, E1000), and the qcow2 and the OVA have been imported and booted on **Proxmox VE** with the steps
+above. **Not tested:** VMware ESXi, Workstation and Fusion, VirtualBox and Hyper-V. The OVA follows the OVF
+standard (descriptor first in the archive, manifest, a streamOptimized VMDK, one SCSI controller, one E1000
+adapter on the network `VM Network`) and should import where those products accept OVF; if one refuses it, the
+qcow2 converts with `qemu-img convert -f qcow2 -O vmdk` (VMware, VirtualBox) or `-O vhdx` (Hyper-V, generation 2
+with Secure Boot off or the Microsoft UEFI CA template) into a VM you create yourself. A report of what works
+there is welcome.
 
 ### First boot
 

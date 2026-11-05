@@ -89,6 +89,17 @@ collector, a 5 minute timeout per collector, `SESHAT_TRACKER_WORKERS` device pol
 replicas, give each one `SESHAT_TRACKER_SHARD=i/n`: a device is polled by the instance whose index
 equals the hash of the device id modulo n.
 
+### Polled by the server or by an edge
+
+A device is polled by **one** poller: this server (the default) or an [edge](edge.md#polling-on-the-edge) on the
+device's network. The setting is per site, with a per-device override (Tracked devices, *Who polls the devices*; the
+`polled-by` routes in the API), and the Tracked devices page and `GET /api/tracker/devices` show the owner of each device
+(`owner`). Whoever owns a device polls it with these same packs, intervals, spreading and backoff, and the result is stored
+the same way; the status columns (last poll, error, failures, next poll) are written by whoever polled. A server that does
+not own a device does not poll it, whatever `SESHAT_TRACKER_SHARD` says, and poll-now for an edge-owned device is done by
+the edge. If the edge is offline the server does not take the device over: its status stays as the edge last reported it and
+poll-now answers `503 edge_offline` ([when the edge is offline](edge.md#when-the-edge-is-offline)).
+
 A **link-up trap** (or its syslog twin) triggers an immediate, single-port poll: only the
 forwarding, bridge-port, neighbour and interface collectors run, and only entries on that port are
 stored. Bursts for one device are coalesced for 2 s and spaced at least 20 s apart.
@@ -343,7 +354,7 @@ setting is on (high volume). The fields are in [`schema/fields.md`](schema/field
 | `GET /api/tracker/export.csv?q=` | yes (its own query) | yes | yes |
 | `POST /api/tracker/lookup/batch`, `GET /api/tracker/bindings` ([bulk reads](#bulk-reads-for-integrations)) | 403 | yes | yes |
 | every other `GET` under `/api/tracker/` (status, settings, devices, ports, port history, sources, lists, OUI) | 403 | yes | yes |
-| every `PUT`, `POST`, `PATCH` and `DELETE` under `/api/tracker/` (including poll-now) | 403 | 403 | yes |
+| every `PUT`, `POST`, `PATCH` and `DELETE` under `/api/tracker/` (including poll-now and the polled-by settings) | 403 | 403 | yes |
 
 A `user` or `viewer` gets `403 forbidden` where the table says so, never an empty list. Every lookup, export and port history is written
 to the audit log (who, what, when). Settings can hide facts from the `user` role (user name,
@@ -375,6 +386,8 @@ SQLite, which has no schemas, the same views exist as `tracker_public_<view>`.
   operator; Seshat never polls an unknown device. Each profile only ever polls its allowed networks
   (when none are listed, any device an operator enabled for tracking; never an address known only from
   traffic) and never loopback, link-local or multicast addresses ([details](device-kb.md#where-polling-is-allowed-to-go)).
+- The [pollers on an edge](edge.md#polling-on-the-edge) are these same pollers: the same `Session`, the same source
+  scan, and the same never-poll, allowed-networks, allow-list and ceiling checks, made on the edge before a datagram leaves.
 - The on-demand [SNMP reads through an edge](edge.md#snmp-reads) run on the same read-only `Session` and the same
   credential helper, take the same never-poll and allowed-networks checks on the edge, and are covered by the same
   source scan (it reads their package too).
@@ -409,7 +422,7 @@ SQLite, which has no schemas, the same views exist as `tracker_public_<view>`.
 - Flow sightings are implemented and tested against synthetic flow events, and stay inert until a
   flow input produces `seshat.flow` events; enable them in the settings.
 - In a multi-replica deployment pollers are spread only by the static `SESHAT_TRACKER_SHARD`
-  setting; there is no automatic rebalancing.
+  setting; there is no automatic rebalancing. Devices an edge owns are left out of every shard.
 - The Device Tracker portal ([`device-tracker-portal.md`](device-tracker-portal.md)) reads the tracker's
   tables and views in every data mode and receives pushed data into the same interval tables, so
   there is one set of tables and one set of `tracker_public` views. Its change feed
@@ -483,7 +496,7 @@ It opens exactly these routes, within its site/tenant scope:
 | `GET /api/tracker/devices` | the device list |
 | `GET /api/tracker/devices/{id}/ports` | a device's ports from the last full poll |
 | `GET /api/tracker/ports/{device}/{ifindex}/history` | who has been on a port |
-| `POST /api/tracker/devices/{id}/poll` | poll now: a read-only SNMP poll (no SET, no change on the device) |
+| `POST /api/tracker/devices/{id}/poll` | poll now: a read-only SNMP poll (no SET, no change on the device); for a device an edge owns, done by the edge, with the same answer plus `owner` and `results_stored` |
 
 Every other route answers **403 `forbidden`** (never an empty list), including `PUT /api/tracker/devices/{id}`,
 settings, watch and approved lists, the account routes, `/metrics` and the OpenAPI document.

@@ -222,7 +222,74 @@ segment**; use `https://` peer URLs through a proxy if the link crosses anything
 anycast need extra capabilities (`CAP_NET_ADMIN`, `CAP_NET_RAW`) and in Docker run as root on the host
 network ([`ha.md`](ha.md), `deploy/compose/ha-pair.example.yaml`): put those hosts in your trusted tier.
 BGP: peer only with routers you control, set a neighbour password, keep the speaker off
-(`SESHAT_BGP_DISABLE=1`) on nodes that should never announce.
+(`SESHAT_BGP_DISABLE=1`) on nodes that should never announce; details in [BGP anycast speaker](#bgp-anycast-speaker).
+
+### BGP anycast speaker
+
+**Exposure.** The speaker exists only in HA mode 3 ([`ha.md`](ha.md#mode-3-bgp-anycast)) and only while the
+cluster BGP configuration is enabled; in every other mode no BGP code runs and nothing listens on 179/tcp. It
+is built on the GoBGP library, which parses the UPDATE messages it receives from its neighbours. The anycast
+speaker only has to **announce** the service addresses and never uses what the routers send it, but the
+library parses every received UPDATE before any policy can act, so a parser flaw is reachable by whoever can
+complete a BGP session with the node. That is the whole attack surface: a session from a configured neighbour.
+
+* **Configured neighbours only.** The speaker connects out to the routers you list (`neighbors[]`). With
+  `listen_port` set it also accepts connections, but only from an address in that list: a connection from any
+  other address is closed without an answer, and there are no dynamic neighbours, peer groups or
+  listen-range sessions.
+* **TTL security (GTSM, RFC 5082), on by default for new neighbours** that are directly connected eBGP
+  (`multihop_ttl` 0 or 1, a remote AS other than yours), IPv4 and IPv6. The speaker sends the session with TTL
+  (hop limit) 255 and the kernel drops segments of it that arrive with a lower one, so a host that is not on the
+  same link as the node cannot reach the session even if it spoofs the router's address. **The router must do
+  the same** (`ttl-security hops 1` on FRR and Cisco IOS-XE; other platforms have an equivalent; see the router
+  examples in `deploy/network/bgp/`), otherwise the session never comes up; the Cluster page and
+  `GET /api/cluster/bgp` then show a hint after 30 seconds. For a router that cannot, or a neighbour more than one
+  hop away, set `ttl_security` to `false` on that neighbour (the Cluster page has a checkbox) and, for multihop,
+  `multihop_ttl` to the hop count:
+
+  ```json
+  {"address": "192.0.2.1", "remote_as": 64500, "multihop_ttl": 2, "ttl_security": false}
+  ```
+
+  GTSM is not applied to iBGP (a remote AS equal to yours) unless `ttl_security` is `true`; with `multihop_ttl`
+  above 1 it is refused. The status shows `ttl_security` per session.
+
+  **Sessions are started by Seshat.** The library's listener (`listen_port`) does not send the answer to a
+  connection request with TTL 255, which a router doing GTSM may discard. Leave `listen_port` off and configure
+  the router so that it does not initiate sessions towards the nodes (passive towards them, accepting only).
+
+  **Upgrading.** Neighbours stored before this setting existed keep it **off**: on the first start after the
+  upgrade each of them is written with `ttl_security: false`, so a session that worked with a router that does not
+  do GTSM does not go down and take the anycast address with it. The start logs a warning listing them. Turn it on
+  per neighbour once the router is configured for GTSM. Neighbours added afterwards without a value get the default.
+* **TCP-MD5 password (RFC 2385)**: set one on every neighbour (`password`; sealed at rest like the other
+  secrets). It authenticates the TCP segments, so a spoofed or injected segment is dropped before BGP sees
+  it. It needs `CAP_NET_ADMIN` on the node (the anycast units already have it) and the same key on the router.
+  GTSM and the password together mean only a router on the link that knows the key reaches the parser.
+* **Router side**: import only the service prefixes and export nothing but what you intend (examples in
+  `deploy/network/bgp/`), and keep the BGP port filtered to the nodes and routers: allow 179/tcp from the
+  router addresses only.
+* **Upstream status.** The advisory GO-2026-4736 (CVE-2026-30405, a crash of the receive loop through a NEXT_HOP
+  attribute shorter than four bytes) is recorded against every GoBGP version and lists no fixed release.
+  The upstream fix is in GoBGP 4.4.0 and later; Seshat uses 4.11.0. The vulnerability
+  database does not know that yet, so a scanner that goes by the database (`govulncheck`) still reports the call
+  path. Every Seshat build is scanned and fails on any other reachable vulnerability.
+* **Not possible**: dropping received UPDATEs before they are parsed. GoBGP offers import policies, but they run
+  after parsing, so they would not have helped against this class of flaw; the three controls above
+  (configured neighbours, GTSM, MD5) are the ones that keep an attacker away from the parser.
+
+**What to watch**
+
+* `seshat_bgp_session_state{neighbor}` other than 6 for more than a minute, and sessions that flap
+  (`increase(seshat_bgp_withdrawals_total[10m])`): an attacker who can make the speaker restart shows up as
+  repeated session loss. A neighbour whose `last_event` (Cluster page) mentions a malformed message or a notification you did
+  not expect is worth a look.
+* `last_event` of a neighbour on the Cluster page and the `bgp` log lines with `Session will be reset due to
+  malformed BGP` or `treated as withdraw`: a router that sends malformed UPDATEs is broken or hostile.
+* A process restart of a node in anycast mode (the unit's restart counter) with no deploy: the anycast address
+  fails over to the other nodes within the hold time, so an outage would be brief, but it is the symptom of a
+  crash in the parser.
+* New advisories for `github.com/osrg/gobgp`: run `govulncheck` against your own build, or check the SBOM that ships with each release.
 
 ## 9. Backups
 
@@ -318,9 +385,11 @@ by commit, builds with the committed `go.sum`, and uses digest-pinned base image
   engine boots counter and clock (many do not persist `engineBoots`) are dropped by design until they
   resynchronise. Switching `v3_time_window` off removes the protection altogether. Keep the trap path on a
   network where an attacker cannot capture and re-inject packets (`inputs/snmp.md`).
-* **GoBGP advisory (GO-2026-4736).** The BGP library used by the anycast speaker has a denial-of-service
-  advisory with no upstream fix. The speaker is off unless configured and talks only to the neighbours you
-  list; peer with routers you control and watch for a fix.
+* **GoBGP advisory (GO-2026-4736).** The vulnerability database still lists the BGP library of the anycast
+  speaker as affected in every version, although the upstream fix is in the version Seshat ships (see
+  [BGP anycast speaker](#bgp-anycast-speaker)). Scanners that go by the database will report it until the
+  entry is updated. The speaker is off unless configured and talks only to the neighbours you list; use
+  TTL security and a TCP-MD5 password with it.
 * **Plain HTTP and the streaming-telemetry dial-out port** need TLS added by you (proxy, or
   `SESHAT_TELEMETRY_TLS_*`).
 * **One key seals everything**; there is no hardware-backed key store. Protect it as the root secret.

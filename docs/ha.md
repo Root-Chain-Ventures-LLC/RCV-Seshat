@@ -402,7 +402,7 @@ in SQLite mode, so every node gets it within seconds. Only the router ID differs
 |---|---|
 | `enabled`, `local_as` | the speaker and Seshat's AS (eBGP: it must differ from the router's) |
 | `router_id`, `router_ids` | the BGP identifier (an IPv4 address) and per-node overrides by node name. Must be unique among the nodes; use each node's own address |
-| `neighbors[]` | `address`, `remote_as`, optional `password` (TCP-MD5, RFC 2385: stored sealed with AES-256-GCM keyed from `SESHAT_SECRET_KEY`, **never returned** by the API; omit to keep it, `clear_password` to drop it), `multihop_ttl` (0 or 1: directly connected; 2-255: multihop eBGP), `hold_time_seconds` (default **9**) and `keepalive_seconds` (default a third of the hold time), `port` (179), `local_address`, `description`. A neighbour's address family decides what is announced to it: an IPv4 neighbour carries the /32s, an IPv6 neighbour the /128s. For both families configure two sessions |
+| `neighbors[]` | `address`, `remote_as`, optional `password` (TCP-MD5, RFC 2385: stored sealed with AES-256-GCM keyed from `SESHAT_SECRET_KEY`, **never returned** by the API; omit to keep it, `clear_password` to drop it), `multihop_ttl` (0 or 1: directly connected; 2-255: multihop eBGP), `ttl_security` (GTSM, RFC 5082: **on by default for a neighbour added now** when it is directly connected eBGP, so its router must send TTL 255 too, for example FRR/Cisco `ttl-security hops 1`; neighbours stored before this setting existed were set to `false` on upgrade; `false` also for a router that cannot do GTSM or a neighbour further away; see [`hardening.md`](hardening.md#bgp-anycast-speaker)), `hold_time_seconds` (default **9**) and `keepalive_seconds` (default a third of the hold time), `port` (179), `local_address`, `description`. A neighbour's address family decides what is announced to it: an IPv4 neighbour carries the /32s, an IPv6 neighbour the /128s. For both families configure two sessions |
 | `prefixes[]` | the anycast service addresses: `prefix` (`/32` or `/128`), `communities` (`64512:100`, `no-export`...), `med`, `local_pref` (iBGP only) |
 | `withdraw.on` | which conditions withdraw: `score`, `listeners`, `store` (default all) and `drain` (always; it cannot be removed) |
 | `withdraw.min_health_score` | withdraw while the node's health score is below this (default **70**; the score is the one on the Cluster page and `seshat_cluster_health_score`) |
@@ -410,8 +410,10 @@ in SQLite mode, so every node gets it within seconds. Only the router ID differs
 | `program_addresses`, `address_interface` | add the prefixes to this interface (default `lo`) while the speaker runs, and remove them when it stops |
 | `listen_port`, `listen_addresses` | also accept sessions the routers initiate (default off: Seshat connects out; port 179 needs `CAP_NET_BIND_SERVICE`) |
 
-Set the router to **not** be passive towards Seshat, and import only the service prefixes from it
-(prefix-list examples in the router configs). Seshat accepts and ignores whatever the router sends.
+Sessions are started by Seshat (leave `listen_port` off): configure the router passive towards the nodes, so it
+never initiates, which matters with TTL security because the library's listener does not answer with TTL 255. Import
+only the service prefixes from the nodes (prefix-list examples in the router configs). Seshat accepts and ignores
+whatever the router sends.
 
 ### When a node announces and withdraws
 
@@ -543,7 +545,7 @@ the same in the BGP anycast panel.
 
 | Symptom | Likely cause |
 |---|---|
-| Session stays `active` or `connect` | the router is not reachable, or filters TCP 179; check `ip route get`, the router's neighbour config and ACLs; with a password, both sides must have the same key and the process needs `CAP_NET_ADMIN` |
+| Session stays `active` or `connect` | the router is not reachable, or filters TCP 179; check `ip route get`, the router's neighbour config and ACLs; with a password, both sides must have the same key and the process needs `CAP_NET_ADMIN`; a neighbour with TTL security on (the default for one added now) never completes the session with a router that does not do GTSM (it sends TTL 1): enable GTSM on the router or set `ttl_security` to `false` for that neighbour; the status shows a hint after 30 s |
 | Session flaps with a `hold timer expired` event | the keepalive is lost: raise the hold time, check the path MTU and CPU starvation of the node |
 | Session `established` but the router has no route | the router's inbound prefix-list does not permit the /32 (/128), or the prefix is withdrawn on this node (the panel says why) |
 | Prefix shown `withdrawn: address` | the process can not add the address to the loopback (capability) and it is not there; grant `NET_ADMIN`, or add the address yourself and set `program_addresses` to false |

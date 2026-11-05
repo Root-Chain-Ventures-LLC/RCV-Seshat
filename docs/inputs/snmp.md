@@ -41,6 +41,26 @@ The listener runs when `--role` is `all`, `collector` or `edge`. `GET /api/ready
   and `seshat.trap.version: unknown`, and counted in `seshat_snmp_decode_errors_total`. The raw
   datagram rides on the in-process event (not in the JSON) for the future raw-relay output.
 
+## Passthrough: the original PDU
+
+**Inputs, SNMP traps, Passthrough** (`"passthrough": true` in the `config` of `PUT /api/inputs/snmp`) ships every
+datagram as received as its own stream, beside the decoded traps, taken after the allow-list and before the rate
+limits, the SNMP decode and the SNMPv3 checks. It includes datagrams that do not decode, SNMPv3 messages of unknown
+senders and discovery messages. Binary, so JSON destinations carry it as base64 in `event.original`
+(`seshat.passthrough.encoding` is `base64`); `raw_relay` forwards the PDU bytes unchanged. Informs are acknowledged by
+the normal path only; the passthrough copy is a copy. Off by default. The stream is bounded by `passthrough_max_eps`
+(records per second, 0 = 250000) and idles while no passthrough route has a destination. See
+[Routing and outputs](../outputs.md#the-passthrough-stream) and [the passthrough contract](../schema/passthrough.md);
+the decoded event names the record in `seshat.source.passthrough_id`.
+
+**Security: community strings and SNMPv3 headers.** An SNMPv1/v2c community string is a shared secret sent in clear.
+With `passthrough_redact_community` (default **on**, the switch under Passthrough on the SNMP page) the passthrough copy
+has the community octets overwritten with `*` of the same length, so the BER lengths stay valid and the PDU still
+decodes; the decoded event and a `raw_relay` of the enriched event keep the original datagram. SNMPv3 messages are
+passed as received: with privacy the scoped PDU is encrypted, but the message header is visible (authoritative engine ID,
+user name, message ids, security level), and the datagrams of unknown senders and engine-discovery messages are included
+too. Treat a passthrough destination with the trust level of the traps' network, or relay over TLS.
+
 ## Informs
 
 An inform is a trap the sender wants confirmed. Seshat accepts it into the pipeline and then answers
@@ -143,6 +163,26 @@ message ID, size, flags, security model, the user-security block (engine ID, boo
 authentication and privacy parameters) and the scoped PDU must all be present with the right types.
 A message that fails that check is counted in `seshat_snmp_decode_errors_total` and forwarded as an
 undecodable event like any other undecodable datagram.
+
+## Trap mappings: a normalised `event.action`
+
+A trap carries the generic `seshat.trap.*` block, and the message `<MIB>::<name> <varbinds>`. A pack can
+add a `traps:` mapping (`mappings/*.yaml`, packs.md section 8.2) that sets more fields for
+one notification OID. The built-in `standard` pack maps the IF-MIB link traps, so a trap and the vendor
+syslog message that report the same thing carry the same `event.action`:
+
+| Notification | `event.action` | Also set |
+|---|---|---|
+| `linkDown` (`1.3.6.1.6.3.1.1.5.3`) | `interface-down` | `seshat.interface.index` (from `ifIndex`), `seshat.interface.state` `down`, `event.type` `change` |
+| `linkUp` (`1.3.6.1.6.3.1.1.5.4`) | `interface-up` | the same, with state `up` |
+
+The notification name is not lost: it stays in `seshat.trap.name` (and in `message`). A route that
+matched `event.action == linkDown` should match `event.action == interface-down` (or `seshat.trap.name ==
+linkDown`). A notification no pack maps keeps its name as `event.action` (its OID when the MIB is not
+installed). The standard pack also maps `coldStart`, `warmStart`, `authenticationFailure`, the bridge
+`newRoot` and `topologyChange`, `entConfigChange` and `lldpRemTablesChange`. A pack that fails to compile
+its `traps:` entries is skipped entry by entry and logged at start (`trap mapping problem`); the other
+entries and traps are not affected.
 
 ## Trying it
 

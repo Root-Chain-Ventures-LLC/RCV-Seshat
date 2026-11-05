@@ -33,6 +33,18 @@ The environment values are the defaults until the settings are saved once.
 
 `/api/ready` reports each enabled listener to an administrator, an operator, a viewer or the metrics token (anonymous callers get only the verdict).
 
+## Passthrough: the original datagram
+
+**Inputs, Flow input, Passthrough** (`"passthrough": true` in `PUT /api/inputs/flow`) ships every datagram exactly as
+received as its own stream, beside the decoded flow records: **one passthrough record per datagram**, however many flow
+records it holds, taken after the allow-list and before the per-exporter limits and the decode. Every flow event decoded
+from that datagram names the record in `seshat.source.passthrough_id`, so one record joins to many events. The datagram is
+binary, so JSON destinations carry it as base64 in `event.original`; `raw_relay` forwards it unchanged, which is how a
+second collector gets the untouched export. Template state is kept only by the decode path: a passthrough consumer needs
+the exporter's templates to read a NetFlow v9 or IPFIX data set. Off by default; bounded by
+`passthrough_max_eps` (datagrams per second, 0 = 250000), and idle while no passthrough route has a destination. See
+[Routing and outputs](../outputs.md#the-passthrough-stream) and [the passthrough contract](../schema/passthrough.md).
+
 ## Pointing devices at Seshat
 
 Send flows to the host's UDP port. The exporter's **source address** identifies it: it is the key of

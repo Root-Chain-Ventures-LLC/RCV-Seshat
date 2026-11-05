@@ -48,12 +48,13 @@ server: the edge pulls it.
 
 | Part | Behaviour |
 |---|---|
-| Inputs | SNMP traps/informs (v1, v2c), syslog (UDP, TCP) and flows (NetFlow v5/v9, IPFIX, sFlow), configured per edge on the server (`snmp`, `syslog`, `flow` blocks of the edge configuration, the same settings as the server's Inputs pages). Their site and VRF are forced to the edge's. SNMPv3 users and TLS syslog are not distributed yet. GeoIP databases are read from the edge's own `SESHAT_GEOIP_*` files. |
+| Inputs | SNMP traps/informs (v1, v2c), syslog (UDP, TCP), flows (NetFlow v5/v9, IPFIX, sFlow) and streaming telemetry ([dial-out listener and dial-in targets](#streaming-telemetry)), configured per edge on the server (`snmp`, `syslog`, `flow` and `telemetry` blocks of the edge configuration, the same settings as the server's Inputs pages). Their site and VRF are forced to the edge's. SNMPv3 users and TLS syslog are not distributed yet. GeoIP databases are read from the edge's own `SESHAT_GEOIP_*` files. |
 | Enrichment | The edge holds a **read-only snapshot of the known devices of its own site**, pulled from the server (ETag, every few minutes, kept on disk so a restart works offline). Unknown senders get the same capped expiring stubs as on the server, kept in memory only. |
 | Router | Exactly one built-in destination, `upstream`, receives everything. Server-configured local outputs (`raw_relay`, `syslog`, `file`) each get a route with their own match expression. |
 | Queue | The same disk queue as every destination (`$SESHAT_DATA_DIR/queue/upstream`, 1 GiB by default, spill). Nothing is dropped because the server is away. |
 | Rate limit | An edge-wide token bucket (events per second), set on the server; what it drops is counted. |
 | Packs | The server's pack directories (tar.gz, ETag). A change restarts the edge's pipeline. Until the first sync it uses the packs shipped with the image. |
+| Pollers | The Device Tracker pollers (FDB, ARP, ND, wireless, subscriber tables, per the packs) and the knowledge base's SNMP lookup, for the tracked devices an administrator assigned to this edge ([Polling on the edge](#polling-on-the-edge)). None until a device is assigned. Their results travel on the same stream as the events. |
 | Relay | Off by default. When an administrator turns it on and lists the hosts it may reach, the edge opens TCP connections to them for authorised clients ([Relay](#relay)). It runs on its own connection to the server and goroutines, never on the event path. |
 | State | Only `edge.json`, the queue, the packs and the KB snapshot. No database file is ever written; the components that expect a store get a private in-memory one. |
 
@@ -67,6 +68,9 @@ event: `{"s": sequence, "e": typed document, "x": extra fields, "r": original da
 "a": sender ip:port}`. The datagram and sender travel as sidecar fields, so the server can still
 raw-relay what an edge received.
 
+- **Record types.** A line without a `t` field is an enriched event. `"t": "poll"` is a poll result (below). `"t": "passthrough"` marks a passthrough
+  record, see [below](#the-passthrough-stream-through-an-edge). A server refuses (and skips for good) a type it does not
+  know, so new types are additive.
 - **Acknowledged.** The reply is `{"last_seq", "accepted", "duplicates", "rejected"}`; `last_seq` is the
   highest sequence the server holds for this edge. The edge's queue releases a batch only after its
   acknowledgement; a partial acknowledgement retries just the rest.
@@ -133,6 +137,16 @@ raw-relay what an edge received.
   looks like an attack is a server whose database was restored from an older backup: the edge's numbering is
   then far ahead of the restored mark. An administrator accepts it with `POST /api/edges/{id}/resync`
   (audit `edge.resync`): the next record, within ten minutes, becomes the new baseline.
+- **Poll records.** The results of the edge's [pollers](#polling-on-the-edge) are records of a second type on the
+  same stream: `{"s": sequence, "t": "poll", "p": {...}}` has no `e` (there is no event). They take their numbers from the same counter,
+  wait in the same disk queue, are acknowledged in the same order and are dropped by the same cursor as events, so a
+  link outage delays them and loses none. A record of a type the server does not know is counted as rejected and skipped,
+  like a bad event. If the server cannot store a poll record just now (its database is away, or who owns the device
+  cannot be told yet) it stops the batch before that record without moving the cursor, and the edge resends it with
+  everything after it. That is bounded: a record asked for again for more than two minutes or forty times is rejected,
+  counted (`seshat_edge_poll_records_dropped_total`) and skipped, so a record that can never be stored cannot hold the
+  stream. Only a store that is unavailable, a lookup that has not answered or the per-edge rate bound ask for a retry;
+  bad content is refused at once.
 - **Raw relay.** The datagram and sender an edge reports are carried for raw relays, but a `raw_relay`
   destination with `preserve_source` never uses an edge-reported sender address: the packets would carry a
   source the server cannot vouch for. Such events fail that destination with a counted error; send them
@@ -145,6 +159,43 @@ the reply carries the dedup mark and a hint when a new configuration or a certif
 exactly the devices its events are looked up in) and the
 public `GET /ca`. `config`, `packs` and `kb/snapshot` honour `If-None-Match` and answer `304`.
 
+## The passthrough stream through an edge
+
+An input can ship the original message untouched beside the enriched event ([the passthrough
+stream](outputs.md#the-passthrough-stream)). On an edge this is switched on in the edge's configuration on the server,
+with `"passthrough": true` in the `syslog`, `snmp` or `flow` block (the same setting as the server's Inputs pages).
+The edge then takes each message at its listener, before decoding, and sends it upstream on the same stream, with the
+same queue, sequence numbers, acknowledgements and de-duplication as the events, as a record of type `passthrough`:
+
+```
+{"s": 42, "t": "passthrough", "e": {the minimal seshat.passthrough document}, "r": original bytes (base64), "a": "ip:port"}
+```
+
+The server does not run these records through enrichment. It rebuilds them (site, VRF, edge id, data stream and
+observer are the registry's, the encoding and the length are recomputed from the bytes, any other field is dropped)
+and hands them to its **passthrough routes**, so a remote site's raw stream reaches the server's destinations
+(`raw_relay`, a `syslog` relay with `content: raw`, Elasticsearch, Kafka, a file...) with `seshat.source.edge` set.
+The record keeps the id the edge gave it, so the enriched events the edge forwarded for the same messages join to
+it through `seshat.source.passthrough_id`. A record whose type and dataset disagree, or of a type the server does not
+know, is refused and counted as `rejected`.
+
+- The passthrough stream has its own rate bucket on the edge, `rate_limit.passthrough_events_per_second` and
+  `passthrough_burst` (0 = the same rate and burst as the edge-wide limit): the limit protects the link to the server,
+  and neither stream spends the other's tokens.
+- The edge has no passthrough route of its own: its built-in route sends the stream to `upstream`. Site-local
+  outputs still receive the enriched stream only.
+- Passthrough doubles the bytes sent upstream for the inputs that have it on (the original and the decoded event).
+  Switch it on only where the server needs the raw stream.
+- Versions. An edge only produces passthrough records when its configuration, pulled from the server, switches an
+  input's `passthrough` on, which a server older than this feature has no way to do, and an older edge ignores the key.
+  If a server is downgraded below its edges, or an edge keeps a newer configuration than the server it now talks to,
+  the older server refuses the records (its dataset allow-list has no `seshat.passthrough` and it ignores the record
+  type): they are counted as rejected, the sequence moves past them for good and the events around them are unaffected.
+  The passthrough records sent in that window are lost; switch passthrough off in the edge's configuration before
+  downgrading the server.
+- Enable it in the Edges drawer (Passthrough), or by setting `"passthrough": true` in the edge's `syslog`, `snmp` and
+  `flow` blocks.
+
 ## What an edge keeps on disk
 
 `edge.json` (mode 0600, written atomically in a 0700 directory) holds the edge's private key, certificate,
@@ -153,7 +204,7 @@ TLS key, for instance) in plain text: the edge has no stable key of its own to s
 no secrets at rest" is not true of it. Protect the data directory like a key store (dedicated user, disk
 encryption), and prefer local outputs that need no secret. The queue directory is private as well.
 
-Three more files live next to it, all mode 0600:
+Further files live next to it, all mode 0600:
 
 - `snmp-seal.key`: the edge's X25519 key for sealed SNMP credentials ([SNMP reads](#snmp-reads)), made at first start
   (written and synced to disk before it is used). The edge refuses a key file that is empty, damaged or readable
@@ -163,7 +214,8 @@ Three more files live next to it, all mode 0600:
 - `snmp-used.log`: the ids and expiry of the sealed credentials already used (no credential, no key), so that a restart
   does not reopen the replay window of a blob that leaked; at most 100,000 live entries, beyond which sealed reads are
   refused with `limit_exceeded` until some expire (a blob lives five minutes at most).
-- `snmp-profiles.enc`: the SNMP credentials of the site's profiles, only on an edge that has the SNMP reads switched on.
+- `snmp-profiles.enc`: the SNMP credentials of the site's profiles (and the v2c communities of the tracked devices' VRF
+  contexts), only on an edge that has the SNMP reads switched on or has tracked devices assigned to it.
   They are **not** in `edge.json`. The file is encrypted with XChaCha20-Poly1305 under a key derived (HKDF-SHA256)
   from `snmp-seal.key`, so the credentials are not readable in a copy of `edge.json`, a backup of the one file, or
   a support bundle. This is encryption at rest in the limited sense: the key sits in the same directory, so
@@ -171,7 +223,129 @@ Three more files live next to it, all mode 0600:
   edge's private key. Protect the directory as above. The file is replaced whole at every configuration change,
   so a profile that is deleted, disabled or cleared on the server is gone from the edge at its next sync, and the file is
   removed when the reads are switched off.
+- `telemetry-secrets.enc`: the TLS key of the dial-out listener and the dial-in targets with their credentials, only on
+  an edge that has them ([Streaming telemetry](#secrets-on-the-edge)); encrypted like `snmp-profiles.enc`.
 - `kb-snapshot.json.gz` and `packs/` (not secret).
+
+## Streaming telemetry
+
+An edge can collect streaming telemetry on a network the server cannot reach: it listens for devices that
+dial out (Cisco MDT, Juniper `DialOutSubscriber`, gNMI dial-out) and it dials the gNMI and Juniper JTI
+targets an administrator assigns to it, with the same decoders and sessions as the server
+([`inputs/telemetry.md`](inputs/telemetry.md)). The samples become `seshat.metric` events on the edge's
+ordinary stream, so they take the path of every other event: the edge's rate limit, the site-scoped
+knowledge-base stamp, the disk queue (a link outage delays them and loses none), and on the server the
+site, VRF and edge stamp, the routes, and the Prometheus remote-write, InfluxDB and OTLP destinations.
+Telemetry is read-only toward devices: a dial-in subscription only reads (no gNMI Set).
+
+### Dial-out listener
+
+The `telemetry` block of the edge configuration (Edges page, drawer, *Streaming telemetry*, or
+`POST /api/edges/{id}/config`):
+
+```json
+{ "telemetry": {
+    "dialout_listen": "192.0.2.5:57400",
+    "allow_list": ["192.0.2.0/24"],
+    "tls_cert": "-----BEGIN CERTIFICATE-----...", "tls_key": "-----BEGIN PRIVATE KEY-----...", "client_ca": "-----BEGIN CERTIFICATE-----...",
+    "limits": { "max_streams": 100, "max_connections_per_source": 32 } } }
+```
+
+| Field | Meaning |
+|---|---|
+| `dialout_listen` | `host:port` of the one gRPC port for the three dial-out services. Empty or `off`: no listener. Devices are pointed at the edge. |
+| `allow_list` | CIDRs or addresses that may open a stream; a refused stream is counted (`seshat_telemetry_dropped_total{reason="allow_list"}`). Empty accepts every sender that can reach the port. |
+| `tls_cert`, `tls_key` | PEM; the listener then serves TLS. **Without them it is plaintext gRPC**; the Edges page warns about a plaintext listener on a non-loopback address. The key is stored sealed on the server, never returned by the API (`tls_key_set`; an empty `tls_key` keeps the stored one, `clear_tls_key` removes it). |
+| `client_ca` | PEM bundle; devices must then present a certificate that chains to it. Needs a certificate and key. |
+| `lease_minutes`, `max_events_per_second`, `queue_share_percent` | See *Fencing* and *Rate limit and queue share* below. |
+| `limits` | `max_recv_mib`, `max_streams`, `max_streams_per_source`, `max_connections`, `max_connections_per_source`, `idle_timeout_seconds`, `reassembly_budget_mib`: the table in [`inputs/telemetry.md`](inputs/telemetry.md#ports-and-settings); 0 is the default. |
+
+A change of the listener (address, allow-list, TLS material, limits) restarts the edge's pipeline like a
+change of a trap or syslog listener; queued events stay on disk. Publish the port of a containerised edge
+yourself (`compose.edge.yaml` has the line) and restrict it with the host firewall.
+
+### Dial-in targets
+
+Assign a target to an edge in Inputs, Telemetry (*Run on*), or with `run_on: "edge:<id>"` in
+`PUT /api/inputs/telemetry`. **A target is dialled by exactly one collector, never both**: the server stops
+at once, the edge starts. The edge's site and VRF stamp the samples (an edge cannot claim another); the
+target's own address is reachable from the edge. The edge gets the targets in its configuration, with
+the passwords and client keys, over the authenticated channel; they are not part of the stored edge
+configuration and are never returned by an API. The targets apply live, without restarting the pipeline.
+
+**Settings are the store's, not a replica's.** In a cluster the settings (`inputs.telemetry`) live in the
+database. Who owns a target is worked out from the stored copy: every replica re-reads it on the change
+notification and every 30 s, and an edge is served the targets straight from the store, whichever replica
+it asks. A `PUT` is a compare-and-set against the copy the replica loaded, and holds are worked out from that
+same copy, so a replica that is behind cannot overwrite what another stored: it answers `409
+settings_changed`, refreshes, and the change is repeated on top of the new state. A store that cannot be read
+is an error (`500` to the edge, which keeps what it has), never "this edge has no targets".
+
+**Hand-over.** Moving a target sets a hold so the two sides never dial together. Server to edge: the server
+stops at once and the edge waits 15 s. Edge to server (or to another edge): the old edge learns of it at
+its next sync (its heartbeat asks for one within 30 s) and stops, so the new owner waits 2 minutes. A hold is
+sent to the edge as the time that remains (`hold_secs`), never as a server timestamp, and counted on the
+edge's own clock. The state `handover` shows while a target waits. Moving a target away from an edge that is
+**offline** is refused (`409 edge_offline`) unless `?force=true`, because an edge keeps dialling on its last
+configuration while it is cut off; a forced move holds the new owner for the edge's whole lease (below). The
+server never takes a target over silently. If an assigned edge is deleted, the server dials its targets after
+the hand-back hold (2 minutes from when it first saw the edge gone; a deleted edge is refused at its next
+request and stops at once, but one that was cut off may dial until its lease ends); a target left on an
+edge that has since vanished does not make an unrelated edit fail.
+
+### Fencing: the lease
+
+An edge that is cut off cannot learn that a target was moved, so it does not dial on a stale copy for ever:
+
+* It dials its dial-in targets only **after the server answered a configuration check in this process** (an
+  answer to its sync, or a heartbeat that says its configuration is the current one). A restart with the
+  server unreachable dials nothing until the first answer; the dial-out listener is not affected.
+* It keeps dialling for a **lease** after the last such answer: `telemetry.lease_minutes` (default 10, at
+  most 1440, never less than three sync intervals). When the lease runs out the targets stop (samples
+  already collected still go upstream from the disk queue) and they start again at the next answer.
+* A refusal of the edge's credentials (revoked, deleted) stops them at once.
+
+The status page, `/metrics` (`seshat_edge_telemetry_fence_open`) and the report to the server say whether the
+fence is open and, if not, why. The cost is on the isolated side of a long server-link outage: no dial-in
+telemetry for the part of it beyond the lease. Raise `lease_minutes` where that matters more than a clean
+hand-over after a forced move.
+
+### Rate limit and queue share
+
+Telemetry has a token bucket of its own (`telemetry.max_events_per_second`, default 20000) and may fill a
+share of the upstream disk queue (`telemetry.queue_share_percent`, default 50): beyond either, samples are
+dropped and counted (`seshat_edge_telemetry_rate_limited_total`, `seshat_edge_telemetry_queue_shed_total`)
+while traps, syslog and flows keep the edge-wide limit and the rest of the queue. A flood of samples (a
+dial-out device gone wrong, a gNMI path that is too broad) therefore sheds samples first and never starves
+the other inputs. On the server a record whose `seshat.metric` block is outside its bounds (path 2048 bytes,
+name 256, 32 labels of at most 128/512 bytes, a value that does not have the shape its `value_type` says) is
+refused whole and counted (`seshat_edge_metric_records_refused_total`), and one edge may send at most
+100000 samples a second (`seshat_edge_metric_rate_limited_total`).
+
+### Secrets on the edge
+
+`telemetry-secrets.enc` (mode 0600) in the data directory holds the listener's TLS key and the targets with
+their credentials, encrypted with XChaCha20-Poly1305 under a key derived (HKDF-SHA256, its own label) from
+`snmp-seal.key`, like `snmp-profiles.enc`: they are not in `edge.json` (which keeps only markers), a copy
+of it, or the logs. The file is replaced whole at each configuration change, so a target the server no
+longer sends is gone, and it is removed when none is left. Anyone who can read the whole data directory can
+read it, as for the SNMP credentials. If the file cannot be read (the key was lost) the edge clears its
+configuration etag so the next sync fetches the secrets again, **never** falls back to a plaintext listener
+for a configured TLS certificate (the listener stays off and `/api/ready` says why), and dials no target
+until it has the credentials.
+
+### State and counters
+
+* **Server:** Telemetry page and `GET /api/inputs/telemetry` list the targets with `owner`, the state the
+  edge last reported (`established`, `backoff`, `handover`, ...), last message, messages, last error and
+  `reported_at`; `stale` is set when the edge is not connected (the numbers are then the last it told us),
+  `pending` before it has reported the target. `status.edges` has the listener state and totals per edge;
+  the Edges page shows the same in the drawer. The report rides the 30 s heartbeat and is stored in the database (`edge_telemetry`), so every replica shows
+  the same; whether the edge is online is the database's `last_seen`, the same on every replica.
+* **Edge:** the status page has a Telemetry row; `/metrics` carries `seshat_telemetry_messages_total`,
+  `_updates_total`, `_dropped_total{reason}` and `seshat_telemetry_sessions{state}` (the server's names);
+  `/api/ready` reports the listener as `telemetry-dialout` and, in `warnings`, a plaintext listener on a non-loopback
+  address (the edge stays ready).
 
 ## The edge CA
 
@@ -209,6 +383,7 @@ Every write is in the audit log (the token never is). The enrolment token is ret
 | `SESHAT_EDGE_INSECURE_SKIP_VERIFY` | Evaluation only. |
 | `SESHAT_EDGE_RELAY_CEILING`, `SESHAT_EDGE_RELAY_CEILING_FILE`, `SESHAT_EDGE_RELAY_MAX_MODE` | The edge's own bound on the relay the server may configure ([Relay](#the-edge-local-ceiling)). |
 | `SESHAT_EDGE_SNMP_CEILING`, `SESHAT_EDGE_SNMP_CEILING_FILE` | The edge's own bound on where SNMP reads may go ([SNMP reads](#the-edge-local-ceiling-for-snmp-reads)). |
+| `SESHAT_EDGE_SNMP_SOURCE` | The address, or the name of the network interface, the edge sends SNMP to devices from (the reads and the pollers). Wins over the server's `snmp_read.source_address` ([Poll source address](#poll-source-address)). |
 | `SESHAT_SNMP_TRAP_LISTEN`, `SESHAT_SYSLOG_UDP_LISTEN`, `SESHAT_SYSLOG_TCP_LISTEN`, `SESHAT_FLOW_*_LISTEN` | Local listen addresses, used when the server's configuration leaves them empty. |
 | `SESHAT_PACKS_DIR` | Packs shipped with the install; the server's packs replace them. |
 | `SESHAT_SECRET_KEY` | Not needed. |
@@ -454,9 +629,8 @@ so an edge that is not connected answers `edge_offline`.
   asks; a walk spends one request per GETBULK, and a request the device does not answer is repeated at most twice
   (a credential's retries are capped at 2 and its timeout at 10 s), each repeat taking its own slot. Reads wait for
   their turn rather than failing. The table of devices is bounded; past its cap reads fail with `limit_exceeded`.
-  The budget is a single object on the edge so that local scheduled polling, when it is added, takes from the same
-  budget: a window of reads plus scheduled polls then stays under what the switch is given. Until then it covers the
-  reads alone.
+  The budget is a single object on the edge and the scheduled [pollers](#polling-on-the-edge) take from it too: a
+  window of reads plus scheduled polls stays under what the switch is given.
 - **Telemetry first.** SNMP work has its own bounded worker pool (`max_concurrent`, default 4); the control
   channel is a separate connection from the event stream and the disk queue, so a busy walk never delays events.
 
@@ -612,8 +786,9 @@ nonce, until it would have expired anyway.
               "limits": {"max_concurrent": 4, "timeout_secs": 20, "device_rate": 20, "outside_gap_secs": 60, "min_window_secs": 10}}
 ```
 
-`allow` is the list of networks the reads may reach (rule 3 above; an entry may name a UDP port for sealed credentials,
-rule 6). Leave it empty only if every profile lists its own allowed networks or the edge has a ceiling: otherwise no
+`allow` is the list of networks the reads, and the edge's pollers, may reach (rule 3 above; an entry may name a UDP port for sealed credentials,
+rule 6). `limits.device_rate` is the per-device budget of both. `source_address` and `poll_workers` are described under
+[Polling on the edge](#polling-on-the-edge); the section also governs the pollers when `enabled` is off. Leave it empty only if every profile lists its own allowed networks or the edge has a ceiling: otherwise no
 profile can be used (rule 5). Credentials are not part of what you
 set: the server adds the site's profiles to the document it serves to an edge that has `enabled` on, and they
 never appear in the registry's view of the edge.
@@ -624,6 +799,178 @@ On the edge (`/metrics` and the status page): `seshat_edge_snmp_available` (0 wh
 `seshat_edge_snmp_enabled`, `_active`, `_requests_total`, `_ok_total`,
 `_refused_total{rule}` (the safety rule that refused, or the error code), `_timeouts_total`, `_rows_total`, `_pdus_total`
 (requests sent to devices) and `_ops_total{op}`.
+
+## Polling on the edge
+
+An edge on a network the server cannot route to can run the **Device Tracker pollers and the knowledge base's SNMP
+lookup** for the devices of its own site and VRF. The server polls from its own network, so on a management VLAN with
+no gateway nothing is tracked; the edge sits on that network and polls from there, with the packs, the intervals, the
+spreading and the backoff of the server (they are the same code), and sends the results upstream.
+
+Nothing changes for whoever reads the data: the results are stored in the same interval tables, stamped like
+server-polled results, so lookups, history and the [portal contract](schema/tracker.md) are the same. Polling on the
+edge is read-only like polling from the server: the pollers offer Get, GetNext and GetBulk and nothing else, and the
+build-time scan for SNMP write calls reads this code as well.
+
+### Who polls a device
+
+**One poller per device: the server, or one edge. Never both.** It is a setting:
+
+- **Per site**: *Polled by* `server` (the default) or `edge:<id>`, on the Tracked devices page (*Who polls the devices*, shown once an edge exists) or
+  `PUT /api/tracker/polling/sites/{site}` with `{"polled_by": "edge:<id>"}`. The edge must collect that site. It owns the
+  devices of the site that are in **its VRF**; devices of the site in other VRFs stay with the server.
+- **Per device**, overriding the site: `PUT /api/tracker/devices/{id}/polled-by` with `""` (follow the site), `"server"`
+  or `"edge:<id>"`. The edge must hold the device's site and VRF (`400 validation_failed`, field `polled_by`).
+
+Both are for administrators and operators and are audited (`tracker.polling.site`, `tracker.device.polled_by`).
+`GET /api/tracker/polling` lists the sites, who polls each, how many of their devices an edge polls, and the edges with
+the health of their pollers. `GET /api/tracker/devices` shows the **owner** of every device: `owner.polled_by`
+(`server` or `edge:<id>`), where it comes from (`device`, `site`, `default`), the edge's name and state, and the
+device's own setting in `tracker.polled_by`. Only devices that are *enabled* for tracking are polled, as on the server.
+
+What keeps the two apart:
+
+- The server's scheduler leaves a device an edge owns alone: no timer polls, no trap-triggered port polls, no poll-now.
+  Pollers sharded with `SESHAT_TRACKER_SHARD` all read the same setting, so every shard skips the device.
+- The edge polls exactly the devices its configuration lists, and nothing else.
+- The server stores a poll result only from the edge that owns the device **now**, for a device in that edge's scope. A
+  result from a former owner (a poll that was queued during an outage, or that finished after a hand-back) is refused and
+  counted (`seshat_tracker_edge_poll_refused_total{reason="not_owner"}`).
+
+### Changing the poller
+
+| Change | What happens |
+|---|---|
+| server to edge | The server's pollers stop at once (their replicas look at the setting every few seconds), also for a device that was queued for a worker. The edge learns of the device at its next configuration sync (its heartbeat asks for it within 30 s), adopts the schedule the server had (the same next poll, the same count of failures in a row, so no gap and no restart of the backoff), and does not poll it for 15 s after it became the edge's. |
+| edge to server | The server waits **two minutes** before it polls the device (`hold_until` in the owner). The edge stops at its next sync, within a minute. A result the edge sends after that is refused. |
+| edge to another edge | The same two-minute wait protects the new edge (it is told how long to wait). |
+| the edge is deleted | What it polled goes back to the server, held off for the same two minutes, before the edge is deleted (an edge that is offline never hears that it is gone). |
+| away from an edge that is **offline** | Refused with `409 edge_offline`: an edge that cannot reach the server keeps polling on the configuration it has, so moving its devices would have both poll until it is back. Repeat the request with `"force": true` to accept that; the edge stops as soon as it reconnects and its late results are refused. |
+
+Nothing about a handover compares the server's clock with the edge's: the edge is sent *durations* (how long to wait,
+how long until the next poll was due), and the times in its records are corrected by the offset the heartbeat reply gives
+(to the second). Poll-now of a device still inside its hold or grace answers `409 handover_in_progress` with `Retry-After`.
+
+### When the edge is offline
+
+**The server does not take over a device from an edge that is offline, and says so.** An edge that cannot reach the server
+goes on polling and buffers the results on disk; they arrive, in order, when the link is back
+([the stream](#the-stream)), and none is lost. Meanwhile the device's tracker status shows what the edge last reported,
+and its owner shows the edge in state `offline`. Poll-now answers `503 edge_offline`. Polling the device from the server
+instead would double-poll it as soon as the edge returns and hides that the network behind the edge is cut off; to hand it
+back, move it to the server (with `force`).
+
+**The lease.** So that an edge that cannot hear about a handover does not poll for ever on a stale list, scheduled polls run
+only on a configuration the server confirmed in this process (a configuration sync, or a heartbeat that says it is current),
+and for **ten minutes** after the last confirmation. After that an offline edge goes on collecting and buffering its events
+and relay, but stops its scheduled polls until it reaches the server again; a restart does not poll until the first sync.
+The trade-off: a link outage longer than ten minutes leaves a gap in the polls (the results are not buffered because they
+were never taken), in exchange for never double-polling a device the server gave to someone else while the edge was away. A
+poll already running finishes, and its result is refused if the device is no longer the edge's. The Edges page shows the pollers' health and warns when an offline edge
+polls devices; an alert on `seshat_edge_up == 0` covers the rest.
+
+### Credentials, and the reads switch
+
+The pollers use the profiles of the edge's site that the on-demand reads use, kept as described under
+[What an edge keeps on disk](#what-an-edge-keeps-on-disk) (`snmp-profiles.enc`), with the same rules: a blank community
+keeps the stored one, *Clear* removes it, a changed profile reaches the edge at its next sync. SNMPv3 users and the
+per-VRF communities of a device (tracker settings) come the same way.
+
+**The switch.** The credentials are sent to an edge when its `snmp_read.enabled` is on **or** when it owns at least one
+device. `snmp_read.enabled` alone decides whether clients may run [on-demand reads](#snmp-reads) through the edge: an edge
+that only polls has them off, and refuses reads with `snmp_disabled`. The rest of the `snmp_read` section (the
+`allow` list, the `limits`, `source_address`, `poll_workers`) applies to the pollers whether the reads are on or not.
+
+The edge enforces the same safety rules before a datagram leaves, and counts a refusal under its rule
+(`seshat_edge_poll_refused_total{rule}`): `never_poll`, `edge_ceiling` (`SESHAT_EDGE_SNMP_CEILING`), `edge_allow_list`
+(`snmp_read.allow`) and `profile_allowed_cidrs`. A scheduled poll goes to a device of the inventory, so unlike a
+client-named target it does not need the profile to list networks of its own (the server's pollers do not either). An edge
+that polls and has no ceiling says so in its log: it then trusts the server's configuration alone.
+
+### The budget
+
+Every SNMP request of a scheduled poll takes a slot of the **same per-device budget** as the on-demand reads
+(`snmp_read.limits.device_rate`, 20 requests per second by default): a repeat of a request the device did not answer
+takes its own slot too (the retries of the profile are capped at two). A window of reads plus a scheduled poll stays under
+what the switch's CPU is given. `snmp_read.poll_workers` (default 4, at most 32) bounds the device polls running at
+once; they run on their own goroutines and never delay the event path.
+
+### Results upstream
+
+A poll produces *poll records* ([the stream](#the-stream)): the observations of the poll (in records of at most 2,000, a
+bigger poll is split) and one result record with the outcome (status, error, duration, the next poll, the failures in a
+row) and the port state of a full poll. The server decides what attributes them: the **site and tenant are those of the
+device in the server's knowledge base**, exactly what a server poll stores, never what the edge says. Each observation is
+rebuilt from the fields the pollers set for its kind (a location, an L3 binding, a wireless client or a user), nothing else
+rides along; its MAC and IP must be valid, an L3 VRF must be one the device is set up to be polled in, numbers are in range,
+text is valid UTF-8 without NUL and at most 512 bytes (cut on a character), a timestamp more than 5 s in the future is
+clamped and one from before the edge owned the device is refused. One bad observation is dropped and counted
+(`seshat_tracker_edge_poll_refused_total{reason="obs_*"}`); the rest of the batch is stored. Results for a disabled device
+are refused. Per edge the server takes at most 200 poll records a second (burst 1,000), and stores one poll of a device
+a second; over that the edge is asked to retry. A MAC's identity site and tenant can only be set to those of a device the
+edge owns. As for a server
+poll, the VRF column of an L3 binding is the VRF context of the ARP table the device reported (`default` when it names
+none). The edge's own site and VRF decide which devices it can own, not a stamp on the rows.
+
+The result record is the device's row on the Tracked devices page: last poll, status, error, duration, MACs, the failures
+in a row and the next poll are the server's own columns, written by whoever polled. The port state of the last full poll
+is kept in the memory of the server node that received it (as the state of a poll is on the node that ran it), so the
+trap handling and the ports view of an edge-polled device work on that node.
+
+### Poll now and status
+
+`POST /api/tracker/devices/{id}/poll` is unchanged for the caller (and for the `tracker.poll` capability and the
+`tracker:read` token, with their limits): for a device an edge owns the server forwards it to the edge over the control
+channel, the edge polls and answers with the same report, and the response adds `owner` and `results_stored`
+(`true` once the edge's results have reached the server, which the call waits for up to 20 s; `false` means they are on
+the stream and arrive in order). Errors: `503 edge_offline`, `409 not_polled_here` (the edge has not received the device yet:
+its configuration syncs within a minute), `409 handover_in_progress` (a hand-back is settling). A link-up trap that reaches
+the server on the edge's stream is forwarded to the edge as a single-port poll.
+
+### Knowledge base lookups
+
+The knowledge base's [active SNMP lookup](device-kb.md#opt-in-snmp-polling) of an address in a scope an edge owns (a site
+setting naming the edge, or a device whose own setting does) is made **by the edge**, from its network, with the same
+OIDs, the same facts and the same safety rules and budget as the pollers; the server stores what comes back. The profile
+that enables it is still Settings, Connectors, Active SNMP polling.
+
+### Poll source address
+
+A dual-homed edge should poll from its management-network address. `snmp_read.source_address` (Edges page, SNMP reads) is an
+IP address or the name of a network interface of the edge host; SNMP to devices, the reads and the pollers, leaves from
+it. With an interface the edge uses its address of the target's family, preferring one in the target's own network. An
+address of the other family, or an interface with none, is logged and the host's routing decides.
+`SESHAT_EDGE_SNMP_SOURCE` on the edge host overrides the server's setting (the edge's operator knows its interfaces). Empty:
+the host's routing.
+
+### The upstream queue
+
+Poll results share the edge's upstream disk queue with its events. They are only queued while the queue is below 80% of its
+size (`upstream.queue_max_mb`); past that the poll fails visibly (`seshat_edge_poll_send_failures_total`, the device's
+status) and is repeated, which leaves the rest of the queue for events; a flood of poll results cannot take the room the
+events need, and a flood of events cannot silently swallow results.
+
+### Health and metrics
+
+The edge's status page shows its pollers (devices, polls running, in backoff, results, SNMP requests, observations sent, and
+a line per device with its status and next poll). On the edge `/metrics`: `seshat_edge_poll_devices`, `_running`,
+`_paused_devices`, `_polls_total{status}`, `_requests_total`, `_records_total`, `_observations_total`, `_send_failures_total`
+(a result the upstream queue did not take: the poll is reported as failed), `_refused_total{rule}` and
+`_last_poll_timestamp_seconds`. The heartbeat carries a summary, shown on the Edges page. On the server:
+`seshat_tracker_edge_poll_results_total{status}`, `_observations_total` and `_refused_total{reason}` (`not_owner`,
+`out_of_scope`, `kind`, `malformed`).
+
+### What differs from polling from the server
+
+- An edge knows the devices of its own site and VRF only. When it decides whether the neighbour on a port is
+  infrastructure (and so the port an uplink) it uses its capabilities and what it knows of its own scope; a switch of
+  another site on a trunk is recognised by its LLDP or CDP capabilities, not by the server's inventory.
+- The server must be of a release that accepts poll records: upgrade the servers first (the documented order). An older
+  server never lists devices for an edge, so the edge polls nothing; during a rolling upgrade of a cluster a replica that
+  does not yet know the record type rejects it (counted, skipped) while a newer replica stores it, so a few results of an
+  edge can be lost until every replica is upgraded. Assign devices to an edge after the upgrade is complete.
+- Whether an edge is online is read from the database (when it was last heard from, by any replica), so every replica
+  of a cluster agrees on it and on whether moving devices away from it needs `force`.
 
 ## Footprint
 
@@ -639,8 +986,6 @@ Target from the specification: under 100 MB.
 
 ## Limits of this release
 
-SNMPv3 trap users and TLS syslog listeners are not distributed to edges (the SNMP polling profiles of the [SNMP reads](#snmp-reads) are, but only to an edge that has them switched on); the Edges drawer edits the SNMP and syslog listeners but the `flow` block is API/JSON only; local
-Device Tracker polling at the edge is not available yet (the per-device request budget of the SNMP reads is built to be
-shared with it when it arrives); a changed packs set or
+SNMPv3 trap users and TLS syslog listeners are not distributed to edges (the SNMP polling profiles are, but only to an edge that has the [SNMP reads](#snmp-reads) switched on or [polls devices](#polling-on-the-edge)); the Edges drawer edits the SNMP and syslog listeners but the `flow` block is API/JSON only; a changed packs set or
 configuration restarts the pipeline instead of reloading it; one batch in flight per edge (the measurement above kept up
 with 9,000 events/s; the ceiling was not measured).
