@@ -230,7 +230,7 @@ Further files live next to it, all mode 0600:
 ## Streaming telemetry
 
 An edge can collect streaming telemetry on a network the server cannot reach: it listens for devices that
-dial out (Cisco MDT, Juniper `DialOutSubscriber`, gNMI dial-out) and it dials the gNMI and Juniper JTI
+dial out (Cisco MDT, Juniper `DialOutSubscriber`, gNMI dial-out, Dell OS10) and it dials the gNMI and Juniper JTI
 targets an administrator assigns to it, with the same decoders and sessions as the server
 ([`inputs/telemetry.md`](inputs/telemetry.md)). The samples become `seshat.metric` events on the edge's
 ordinary stream, so they take the path of every other event: the edge's rate limit, the site-scoped

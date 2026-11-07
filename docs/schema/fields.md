@@ -54,7 +54,7 @@ Conventions that apply to every field:
 | `seshat.flow_rollup` | `metric` | one roll-up row for a one-minute window |
 | `seshat.tracker` | `event` | one Device Tracker sighting or interval open/extend/close |
 | `seshat.device` | `state` | one revision of a device knowledge-base record |
-| `seshat.metric` | `metric` | one streaming-telemetry sample (gNMI, Cisco MDT, Juniper JTI): one leaf value |
+| `seshat.metric` | `metric` | one streaming-telemetry sample (gNMI, Cisco MDT, Juniper JTI, Dell OS10): one leaf value |
 
 ## Field tables
 
@@ -375,7 +375,7 @@ Conventions that apply to every field:
 | `seshat.metric.value_type` | keyword | seshat | Y | metric | `int64`, `uint64`, `double`, `string`, `bool` or `delete` (the path was deleted on the device). | `uint64` |
 | `seshat.metric.value_string` | keyword | seshat | O | metric | String form of non-numeric values (`string`, `bool`), so they stay searchable. | `UP` |
 | `seshat.metric.labels` | flattened | seshat | O | metric | List keys of the path flattened to label names (`interface`, `neighbor`, ...). A single-key list element contributes its element name; multi-key elements contribute `<element>_<key>`. | `{"interface": "Ethernet1/1"}` |
-| `seshat.metric.source` | keyword | seshat | Y | metric | Which telemetry adapter produced the sample: `gnmi`, `mdt` (Cisco model-driven telemetry) or `jti` (Juniper). | `gnmi` |
+| `seshat.metric.source` | keyword | seshat | Y | metric | Which telemetry adapter produced the sample: `gnmi`, `mdt` (Cisco model-driven telemetry), `jti` (Juniper) or `os10` (Dell OS10 dial-out). | `gnmi` |
 | `seshat.metric.subscription` | keyword | seshat | O | metric | Subscription (MDT) or sensor/subscription name as the device reports it, when it does. | `sub-interfaces` |
 
 ### `seshat.tracker.*`

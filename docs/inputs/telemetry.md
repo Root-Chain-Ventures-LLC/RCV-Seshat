@@ -8,6 +8,7 @@ Seshat collects model-driven streaming telemetry and turns every leaf value into
 | `gnmi` | dial-in: Seshat connects to the device | gNMI `Subscribe` (JSON_IETF, PROTO or JSON encoding) | Inputs, Telemetry: a target with protocol *gNMI* |
 | `jti` | dial-in | Juniper `OpenConfigTelemetry.telemetrySubscribe` (`OpenConfigData` key/value) | a target with protocol *JTI* |
 | `mdt` | dial-out: the device connects to Seshat | Cisco `mdt_dialout.gRPCMdtDialout/MdtDialout`, self-describing GPB key/value or JSON | the device; Seshat only needs the listener |
+| `os10` | dial-out | Dell OS10 `/ta_stats.DellNetTelemetryService/SendTelemetryStats` and `/telemetry.OpenconfigTelemetry/SendTelemetryStats`, client streams of the switch's own protobuf messages, decoded by Seshat's own wire decoder | the device |
 | `jti` / `gnmi` | dial-out | `/Subscriber/DialOutSubscriber` (Juniper, reported as `jti`) and `/gnmi_dialout.gNMIDialOut/Publish` (reported as `gnmi`), both streams of gNMI `SubscribeResponse` | the device |
 
 Seshat is read-only toward devices: a dial-in subscription only reads. The roles `all` and
@@ -22,6 +23,7 @@ events over its disk-buffered stream ([Streaming telemetry on an edge](#streamin
 |---|---|---|---|
 | Dial-out listener | `SESHAT_TELEMETRY_GNMI_DIALOUT_LISTEN` | `:57400` | One gRPC port for all three dial-out services. `off` disables. Applies at the next start. |
 | Dial-out TLS | `SESHAT_TELEMETRY_TLS_CERT`, `SESHAT_TELEMETRY_TLS_KEY` | off | Without them the listener is plaintext gRPC, which is what many devices default to. |
+| Capture of unknown services | `SESHAT_TELEMETRY_DIALOUT_CAPTURE_DIR` (edge: `telemetry.dialout_capture_dir`) | off | A diagnostic that writes the first raw messages of gRPC methods Seshat does not serve to files. It stores device data on disk: see [Unknown services](#unknown-services-and-the-capture-diagnostic). |
 | Device certificates | `SESHAT_TELEMETRY_TLS_CLIENT_CA` | off | PEM bundle; with it, a device must present a certificate that chains to it. |
 | Largest message | `SESHAT_TELEMETRY_MAX_RECV_MIB` | `4` | One gRPC message, and the size an MDT chunked message may announce. Larger is refused (`ResourceExhausted`). |
 | Streams per connection | `SESHAT_TELEMETRY_MAX_STREAMS` | `100` | Concurrent gRPC streams on one connection; more wait. |
@@ -98,12 +100,56 @@ and the listener and every other stream keep running.
 | Cisco `MdtDialout` | `Telemetry` with `data_gpbkv` (key/value GPB, keys/content rows, nested lists) and the JSON encoding (`data_json` rows); chunked messages (`totalSize`) are reassembled | compact GPB (`data_gpb`): it needs a `.proto` per sensor path from the device. Such rows are counted (`unsupported_value`) and the stream goes on. Use key/value GPB or JSON on the device. |
 | Juniper `Subscriber/DialOutSubscriber`, `gnmi_dialout.gNMIDialOut/Publish` | gNMI `SubscribeResponse` updates: every TypedValue, JSON and JSON_IETF (flattened), deletes | the Juniper header extension is ignored |
 
+| Dell OS10 `ta_stats.DellNetTelemetryService` and `telemetry.OpenconfigTelemetry` `SendTelemetryStats` | the sensor groups `interface`, `lag`, `system`, `device`, `environment`, `buffer`, `bgp` and `bgp-peer`, with their wrapped values, keyed lists and Decimal64 numbers; the other groups of the newer service (vxlan, lacp, lldp, bfd, stp, ufd, vlan, vrrp, relay agent) too | `config` subtrees, the non-BGP parts of network instances, the per-prefix BGP route lists and the BGP `rib` (cardinality), and user, password and key leaves |
+
 A message that does not decode at all is counted as `decode_error`; a value that cannot be
 represented (an `Any`, proto bytes, malformed JSON) as `unsupported_value`. Neither stops the
 stream and neither loses the other values of the same message.
 
 The device's own name (MDT `node_id_str`, gNMI `prefix.target`) becomes `host.name` unless it is an
 IP address, and is offered to the device knowledge base as a hostname hint.
+
+### Unknown services and the capture diagnostic
+
+A device that calls a gRPC method Seshat does not serve (a vendor whose dial-out service and `.proto`
+files Seshat does not have) used to look "connected" on the device while Seshat showed nothing. Now,
+on the server and on an edge alike, after the allow-list and the connection and stream limits:
+
+* the stream is counted, one per stream, as `seshat_telemetry_dropped_total{reason="unknown_service"}`;
+* a warning names the source address and the full method (for example `/example.vendor.DialOut/Publish`),
+  once per source and method (the last 1024 pairs are remembered, so a pair that comes back after a very
+  long time is logged again);
+* the Telemetry page lists the last unknown methods with their sources and counts (`unknown_services` in
+  `GET /api/inputs/telemetry`; the ones an edge saw are in its entry under `edges`);
+* the stream is answered with gRPC `Unimplemented`, after Seshat has read and discarded up to 8
+  messages or waited up to 30 seconds, whichever comes first. Many dial-out clients show the collector
+  as connected only while it takes their data, and never open a session if it hangs up at once. The
+  reading is bounded (at most 256 such streams are read at a time; beyond that the stream is answered
+  at once) and never touches the event pipeline.
+
+**Capture (opt-in, off by default).** To analyse an undocumented vendor format from your own system, set
+`SESHAT_TELEMETRY_DIALOUT_CAPTURE_DIR` on the server, or `telemetry.dialout_capture_dir` in an edge's
+telemetry section. Seshat then writes the first 5 messages of every (source, method) pair, as the raw
+protobuf bytes of the gRPC message, to
+
+```
+<dir>/<method>/<source>-<n>.bin          e.g. captures/example.vendor.DialOut_Publish/192.0.2.30-1.bin
+```
+
+(names are made of letters, digits, `.`, `-` and `_`; anything else, including the `/` of the method,
+becomes `_`). Files are mode `0600` in directories of mode `0700`, never overwritten, at most 1 MiB each
+(a longer message is cut) and at most 200 files in all; the writes are done off the stream and a message
+that finds the writer busy is dropped. On an edge the value is a relative directory name under the edge's
+data directory (an absolute path or `..` is refused). Read a file with
+
+```
+protoc --decode_raw < captures/example.vendor.DialOut_Publish/192.0.2.30-1.bin
+```
+
+This is a diagnostic. **The files hold device data** (interface names, addresses, counters, possibly
+hostnames), so keep the directory private, delete the files when you are done, and **turn the setting
+off after use** (a restart applies it; an edge applies a change by restarting its pipeline, which
+the edge does itself). Seshat logs a warning at start while it is on.
 
 ## Streaming telemetry on an edge
 
@@ -114,7 +160,10 @@ upstream. Full operator guide: [`../edge.md`](../edge.md#streaming-telemetry).
 * **Dial-out on the edge.** The edge's configuration has a `telemetry` section (Edges page, drawer,
   *Streaming telemetry*): `dialout_listen`, an allow-list, the limits of the table above, and optional
   TLS (`tls_cert`, `tls_key`, `client_ca`). Point the devices at the edge's address. The Cisco MDT,
-  Juniper `DialOutSubscriber` and gNMI dial-out services are served on that one port.
+  Juniper `DialOutSubscriber`, gNMI dial-out and Dell OS10 services are served on that one port. Streams that call
+  any other method are counted and logged as described under
+  [Unknown services](#unknown-services-and-the-capture-diagnostic); `dialout_capture_dir` turns on the
+  capture diagnostic on the edge.
 * **Dial-in from the edge.** In Inputs, Telemetry, give the target *Run on* an edge (`run_on`:
   `edge:<id>`). The edge dials it from its own network. Passwords and client keys are sent to that edge
   only, are never written to `edge.json` and are kept encrypted on the edge.
@@ -136,7 +185,8 @@ data stream `logs-seshat.metric-<ns>`). The fields are in `docs/schema/fields.md
 document in `docs/schema/examples/metric.json`.
 
 * `@timestamp` is the notification time from the device (gNMI nanoseconds, MDT and JTI
-  milliseconds); a missing or implausible one (more than 7 days from now) is replaced by the
+  milliseconds; OS10's unit is told apart by magnitude: seconds, milliseconds, microseconds or
+  nanoseconds, the timestamp of the sensor message first and the stream header second); a missing or implausible one (more than 7 days from now) is replaced by the
   receive time. `event.created` is the receive time.
 * `host.ip` is the address of the connection, `host.name` the target name (dial-in) or the device's
   own name (dial-out). The KB stamps `seshat.device.*` like for any other event.
@@ -254,13 +304,67 @@ EOS listens on its gNMI port (6030 by default; the Seshat target address must na
 the local user database for the `username` / `password` metadata. Add `ssl profile <name>` under
 the transport for TLS.
 
+**Dell SmartFabric OS10, gRPC dial-out:**
+
+```
+telemetry
+ enable
+ destination-group seshat
+  destination 192.0.2.50 57400
+ subscription-profile seshat
+  sensor-group interface 30000
+  destination-group seshat
+  encoding gpb
+  transport grpc no-tls
+  source-interface mgmt1/1/1
+```
+
+* One destination group, with **one destination per switch**: the switch dials the address and port it is
+  given. Point it at the server or at an edge.
+* TLS is **on by default** on OS10. `transport grpc no-tls` selects plaintext, which is what a Seshat
+  dial-out listener without `SESHAT_TELEMETRY_TLS_CERT` / `_KEY` serves. For TLS, give the listener a
+  certificate the switch trusts.
+* On the OS10 10.5.4 releases (seen on build 7) a **source interface is mandatory** for gRPC. Without it the profile stays
+  `Active: false, Reason: Missing mandatory configurations: source_interface`, although the 10.5.5
+  user guide calls it optional. The form is `source-interface mgmt1/1/1`; the manual's
+  `management 1/1/1` is rejected.
+* `show telemetry` on the switch reports the connection, not what was decoded: check
+  `seshat_telemetry_messages_total{source="os10"}` and the Telemetry page on the Seshat side.
+
+**What is decoded.** OS10 sends its own protobuf messages to one of two gRPC services, both served on
+the dial-out port: `/ta_stats.DellNetTelemetryService/SendTelemetryStats` and
+`/telemetry.OpenconfigTelemetry/SendTelemetryStats` (whichever the switch's build uses). Seshat decodes
+them with its own wire decoder and a compact table of the field names, not with Dell's service
+definition, and acknowledges each stream with one response message when the switch ends it. The events
+are `seshat.metric` with source `os10`, matched to the device by the address the switch connects from;
+the switch's service tag is not used as a label.
+
+* **Sensor groups** (the `sensor-group` names of the switch): `interface`, `lag`, `system`, `device`,
+  `environment`, `buffer`, `bgp` and `bgp-peer`. The newer service also carries vxlan, lacp, lldp, bfd,
+  stp, ufd, vlan, vrrp and relay-agent groups, which are decoded too.
+* **Paths** follow the model of the group, with underscores written as hyphens and list keys in
+  brackets, for example `/interfaces-state/interface[name=ethernet1/1/1]/statistics/in-octets` or
+  `/interfaces/interface[name=ethernet1/1/1]/state/counters/in-octets`; the metric name is the last
+  element and the keys become labels. When the message carries its own sensor path it is the
+  `subscription` of the samples, otherwise the group name is.
+* **Values.** Wrapped values become numbers, strings and booleans (a Decimal64 becomes a number, a
+  leaf-list one comma-separated string). **Enumerated leaves are numeric**, except `oper-status` and
+  `admin-status`, which are their names (`up`, `down`, `testing`, ...) where the table has them.
+* **Left out**, to keep the data useful and bounded: `config` subtrees, the non-BGP parts of network
+  instances, per-prefix BGP route lists, and user, password and key leaves. A message is bounded in
+  depth and in leaves; one that does not parse is counted as `decode_error` and the stream goes on.
+
+This decoder has been validated against synthetic streams only; check it against your own switch. If
+a group shows nothing, the [capture diagnostic](#unknown-services-and-the-capture-diagnostic) records
+raw messages of the methods Seshat does not serve, so you can compare what the switch sends.
+
 ## Monitoring
 
 | Metric | Meaning |
 |---|---|
-| `seshat_telemetry_messages_total{source}` | messages received (`gnmi`, `mdt`, `jti`) |
+| `seshat_telemetry_messages_total{source}` | messages received (`gnmi`, `mdt`, `jti`, `os10`) |
 | `seshat_telemetry_updates_total{source}` | metric events produced |
-| `seshat_telemetry_dropped_total{reason}` | `allow_list`, `decode_error`, `unsupported_value`, `too_many_sessions`, `stream_limit_source`, `conn_limit`, `conn_limit_source` |
+| `seshat_telemetry_dropped_total{reason}` | `allow_list`, `decode_error`, `unsupported_value`, `too_many_sessions`, `stream_limit_source`, `conn_limit`, `conn_limit_source`, `unknown_service` (a stream called a gRPC method Seshat does not serve) |
 | `seshat_telemetry_sessions{state}` | sessions by state (`connecting`, `established`, `backoff`, `disabled`); dial-out streams count as `established` |
 
 `/api/ready` reports the dial-out listener as `telemetry-dialout` (to an administrator, an operator, a viewer or the metrics token; anonymous callers get only the verdict).

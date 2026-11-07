@@ -50,7 +50,7 @@ the Device Tracker portal are built against it.
 | `seshat.flow_rollup` | metric | one-minute flow roll-ups | `logs-seshat.flow_rollup-exo` |
 | `seshat.tracker` | event | Device Tracker sightings and interval changes | `logs-seshat.tracker-exo` |
 | `seshat.device` | state | device knowledge-base records | `logs-seshat.device-exo` |
-| `seshat.metric` | metric | streaming-telemetry samples (gNMI, Cisco MDT, Juniper JTI) | `logs-seshat.metric-exo` |
+| `seshat.metric` | metric | streaming-telemetry samples (gNMI, Cisco MDT, Juniper JTI, Dell OS10) | `logs-seshat.metric-exo` |
 | `seshat.passthrough` | event | the original message of an input with passthrough on, untouched (see [`passthrough.md`](passthrough.md)) | `logs-seshat.passthrough-exo` |
 
 Unknown devices produce the full event with `seshat.device.status: unknown`; the schema has no

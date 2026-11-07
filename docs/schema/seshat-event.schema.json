@@ -3493,7 +3493,8 @@
                   "enum": [
                     "gnmi",
                     "mdt",
-                    "jti"
+                    "jti",
+                    "os10"
                   ]
                 },
                 "subscription": {
@@ -3527,7 +3528,7 @@
         "observer",
         "seshat"
       ],
-      "$comment": "seshat.metric: streaming telemetry samples (gNMI, Cisco MDT, Juniper JTI): one document per leaf value."
+      "$comment": "seshat.metric: streaming telemetry samples (gNMI, Cisco MDT, Juniper JTI, Dell OS10): one document per leaf value."
     },
     "dataset_passthrough": {
       "type": "object",

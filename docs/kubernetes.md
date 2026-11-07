@@ -66,7 +66,7 @@ ui:
 ```
 
 Then create the first administrator in the browser. Point devices at the LoadBalancer address:
-162/udp traps, 514/udp+tcp syslog, 2055/udp NetFlow, 4739/udp IPFIX, 6343/udp sFlow, 57400/tcp streaming-telemetry dial-out (Cisco MDT, Juniper, gNMI; `intake.ports.telemetryDialout`) (and 6514/tcp
+162/udp traps, 514/udp+tcp syslog, 2055/udp NetFlow, 4739/udp IPFIX, 6343/udp sFlow, 57400/tcp streaming-telemetry dial-out (Cisco MDT, Juniper, gNMI, Dell OS10; `intake.ports.telemetryDialout`) (and 6514/tcp
 for syslog over TLS when `intake.ports.syslogTLS.enabled`).
 
 Other shapes, each a value set the chart is tested with:

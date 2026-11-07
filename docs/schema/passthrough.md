@@ -185,7 +185,7 @@ recomputed from the bytes, and nothing but the envelope above survives.
 
 ## Not covered
 
-Streaming telemetry (gNMI, Cisco MDT, Juniper JTI) has no passthrough: those inputs receive gRPC streams of protobuf
+Streaming telemetry (gNMI, Cisco MDT, Juniper JTI, Dell OS10) has no passthrough: those inputs receive gRPC streams of protobuf
 messages that are reassembled and decoded inside the stream's own framing before any individual message exists, so there
 is no original datagram to tap, and a copy of the protobuf would be useless without the subscription state that
 decodes it. Use the enriched `seshat.metric` stream.
