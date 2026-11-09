@@ -20,7 +20,7 @@ for it. A client record holds:
 |---|---|
 | `name`, `description`, `owner` | Free text; the name is unique and appears in the audit log and the metrics. |
 | `contracts` | The contracts and versions the app is built against (informational; checked against the registry). |
-| `scope` | `sites`, `tenants` (what the tracker capabilities see or write; `*` is everything) and `edges` (what the edge capabilities reach). Nothing is reachable without a scope. |
+| `scope` | `sites`, `tenants` (what the tracker capabilities see or write; `*` is everything) and `edges` (what the edge capabilities reach: edge ids, `group:<id>` for an edge group's relay and SNMP-read routes, or `*`; a group is not reached through its members' entries, nor they through the group's). Nothing is reachable without a scope. |
 | `capabilities` | The capabilities it holds. |
 | `limits` | Optional rate limit per capability (below). |
 | `expires_at`, `disabled` | Expiry and an off switch. A disabled or expired client's tokens stop working at once. |
@@ -75,8 +75,8 @@ Each capability opens exactly the routes it names. A client token on any other r
 | `tracker.poll` | Poll a device now (`POST /api/tracker/devices/{id}/poll`) and per-device status | 60 / min |
 | `sync.write` | Push-sync ingest on the portal (`POST /api/sync/v1/batches`, `GET /api/sync/v1/ping`). The client needs a scope (a site and/or tenant list, or `*`); a token for it must name its `stream_id`. Records outside the scope are refused whole (`out_of_scope`). | 120 / min |
 | `events.subscribe` | The client's own event subscriptions and the event log (`GET/POST /api/integrations/subscriptions`, `GET/PUT/DELETE /api/integrations/subscriptions/{id}`, `GET /api/integrations/events`), within the client's scope. See [Events](#events) | 60 / min |
-| `edge.relay.tcp` | A TCP stream through an edge, with a declared `read` or `write` intent | 60 / min |
-| `edge.snmp.read` | SNMP reads (get, getnext, getbulk, walk) executed by an edge on its own network: `POST /api/edges/{id}/snmp`, `GET .../snmp/key`, `POST .../snmp/windows` ([SNMP reads](../edge.md#snmp-reads)) | 120 / min |
+| `edge.relay.tcp` | A TCP stream through an edge, or through any healthy member of an edge group (`POST /api/edges/{id}/relay`, `POST /api/edge-groups/{id}/relay`), with a declared `read` or `write` intent | 60 / min |
+| `edge.snmp.read` | SNMP reads (get, getnext, getbulk, walk) executed by an edge on its own network: `POST /api/edges/{id}/snmp`, `GET .../snmp/key`, `POST .../snmp/windows` ([SNMP reads](../edge.md#snmp-reads)); and `POST /api/edge-groups/{id}/snmp` and `.../snmp/windows` through a member of an edge group, profile credentials only | 120 / min |
 
 Every client token can also call `GET /api/integrations/contracts` and `GET /api/me` (its own identity).
 Seshat stays read-only toward devices: no capability writes to a device. Capabilities for routes that ship later are

@@ -94,6 +94,17 @@
     },
     "roles": {"type": "object", "additionalProperties": false, "properties": {"split": {"type": "boolean"}}},
     "replicaCount": {"type": "integer", "minimum": 1},
+    "cluster": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "peers": {"type": "array", "items": {"type": "string", "pattern": "^https?://.+"}},
+        "secret": {"$ref": "#/definitions/secretRef"},
+        "allowPlainRelay": {"type": "boolean"},
+        "networkPolicy": {"type": "object", "additionalProperties": false, "properties": {"enabled": {"type": "boolean"}}}
+      }
+    },
     "console": {
       "type": "object",
       "additionalProperties": false,
@@ -194,7 +205,7 @@
       }
     },
     "nms": {"type": "object", "additionalProperties": false, "properties": {"preserveSource": {"type": "boolean"}}},
-    "tracker": {"type": "object", "additionalProperties": false, "properties": {"shardByOrdinal": {"type": "boolean"}}},
+    "tracker": {"type": "object", "additionalProperties": false, "properties": {"shardByOrdinal": {"type": "boolean"}, "pingGroupRange": {"type": "string", "pattern": "^([0-9]+ [0-9]+)?$"}}},
     "portal": {
       "type": "object",
       "additionalProperties": false,

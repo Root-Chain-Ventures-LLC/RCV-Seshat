@@ -69,7 +69,7 @@ template that announces the `--sampling` rate and, for sFlow, counter samples.
 | NetFlow v5 | Fixed layout. `seshat.flow.domain` = engine type and id. The header's sampling mode and interval are honoured. Times come from the router's uptime clock. |
 | NetFlow v9 | Templates and options templates; scope fields are skipped, the options data feeds sampling. `seshat.flow.domain` = source id. |
 | IPFIX | Templates, options templates, template withdrawal, enterprise-specific elements, variable-length elements (short and long length forms), reduced-size encoding of counters, reverse-direction (PEN 29305) byte and packet counts for bidirectional flows. `seshat.flow.domain` = observation domain id. |
-| sFlow v5 | Flow samples (compact and expanded) with raw packet headers (Ethernet with 802.1Q tags, bare IPv4 or IPv6), plain IPv4/IPv6 sample records, and the extended switch, router and gateway records. `seshat.flow.domain` = sub-agent id and `seshat.flow.exporter` = the agent address in the datagram. **Counter samples** do not become events: they are counted (`seshat_flow_counter_samples_total`) and the latest generic interface counters per exporter are kept (shown with the exporter in `GET /api/inputs/flow`). |
+| sFlow v5 | Flow samples (compact and expanded) with raw packet headers (Ethernet with 802.1Q tags, bare IPv4 or IPv6), plain IPv4/IPv6 sample records, and the extended switch, router and gateway records. `seshat.flow.domain` = sub-agent id and `seshat.flow.exporter` = the agent address in the datagram. **Counter samples** (generic interface counters and the Ethernet record) become `seshat.metric` events, see "sFlow interface counters" below; they are also counted (`seshat_flow_counter_samples_total`) and the latest generic interface counters per exporter are kept (shown with the exporter in `GET /api/inputs/flow`). |
 
 NetFlow v5/v9 and IPFIX are decoded by Seshat's own code, sFlow by the `decoders/sflow` package of
 [goflow2](https://github.com/netsampler/goflow2) (BSD-3-Clause) plus a header parser of our own.
@@ -267,8 +267,68 @@ start-up (at most 100 000 rows are read; the excess is logged and ignored).
 | `seshat_flow_evicted_total` | `kind`: `exporter`, `template`, `domain` |
 | `seshat_flow_unknown_ie_records_total` | |
 | `seshat_flow_counter_samples_total` | |
+| `seshat_flow_counter_metrics_total` | `seshat.metric` events made from sFlow counter samples |
+| `seshat_flow_counter_metrics_dropped_total` | `reason`: `datagram_limit`, `interface_limit`, `rate_limit` (counter records, one per interface; `rate_limit` is the per-event bucket) |
 | `seshat_flow_truncated_headers_total` | sFlow sampled headers whose IPv6 extension-header chain ran past the captured bytes |
 | `seshat_flow_exporters` | gauge |
+
+## sFlow interface counters
+
+Most sFlow exporters send a counter sample for every interface every 20 to 30 seconds: octets, packets,
+errors and discards, the speed and the status. Seshat turns each into `seshat.metric` events with the
+shape of the [streaming-telemetry](telemetry.md) ones, so the Prometheus remote-write, InfluxDB and OTLP
+destinations ([`outputs.md`](../outputs.md), "Metric destinations") and routes such as
+`event.dataset == "seshat.metric"` take them unchanged. No SNMP polling is involved.
+
+* **Paths** (OpenConfig style, the interface as the list key, `seshat.metric.source` = `sflow`):
+
+  | Path under `/interfaces/interface[name=<if>]/` | Value | Type |
+  |---|---|---|
+  | `state/counters/in-octets`, `out-octets` | octets | uint64 |
+  | `state/counters/in-unicast-pkts`, `in-multicast-pkts`, `in-broadcast-pkts` and the `out-` ones | packets | uint64 |
+  | `state/counters/in-errors`, `out-errors`, `in-discards`, `out-discards`, `in-unknown-protos` | | uint64 |
+  | `state/admin-status`, `state/oper-status` | IF-MIB numbering: 1 up, 2 down | int64 |
+  | `state/high-speed` | Mb/s (the sample's speed in bit/s divided by one million; left out when the exporter sends 0) | uint64 |
+  | `ethernet/state/counters/in-crc-errors`, `alignment-errors`, `symbol-errors`, `single-collision-frames`, `multiple-collision-frames`, `late-collisions`, `excessive-collisions`, `deferred-transmissions`, `carrier-sense-errors`, `frame-too-longs`, `internal-mac-receive-errors`, `internal-mac-transmit-errors` | from the Ethernet counters record (`dot3Stats*`), which belongs to the sample's source interface | uint64 |
+
+* **Values are raw**: the exporter's monotonic counters as sent (32-bit ones wrap at 2^32; `rate()` and
+  `increase()` handle that), never rates.
+* **Labels**: exactly `interface`, the interface name. The name is the device knowledge base's `ifName`
+  for that `ifIndex` when it knows one (from the SNMP poll or an import), else the `ifIndex` as text (sFlow
+  carries no ifDescr); `seshat.device.interface.name` and `.index` carry both, `.alias` comes from the
+  knowledge base. `seshat.metric.kind` is `counter`, `gauge` (`high-speed`) or `state` (the two statuses).
+  This is the form every input uses for interface metrics, SNMP polling included
+  (`device-tracker.md`, "SNMP metric polling"): the same counter of the same device
+  from sFlow and from SNMP is one Prometheus series. `host` is the knowledge base's device name
+  (`host.name`, stamped by the enrichment stage) when the device is known, else the address; `site` as
+  for telemetry.
+* **Host**: the address the datagram came from. The agent address inside an sFlow datagram is the
+  sender's own claim, so it names the host only when it is the sender itself or the sender is
+  configured as a relay (`sflow_relay: true` on its entry in the exporter overrides, or the word `relay`
+  after the rate in the Inputs, Flows list: `192.0.2.1 0 relay`); then `host.ip` is the agent address
+  first, the sender second. For any other sender the claimed agent address is kept in
+  `seshat.flow.exporter` and the host is the sender. Interface names are looked up for the sender's
+  address only, read-only: a datagram cannot make Seshat create knowledge base records for an address it
+  names.
+* **Status**: `admin-status` and `oper-status` come from the two status bits of the sample, so they are
+  1 (up) or 2 (down) only; sFlow cannot express IF-MIB's testing, dormant, notPresent or lowerLayerDown.
+* **Settings** (Inputs, Flows, "sFlow interface counters"; `GET/PUT /api/inputs/flow`):
+  `counter_metrics` (default on) turns the conversion off for the whole input; counter samples are then
+  only counted and the latest values kept as before. `max_counter_records_per_datagram` (default 256)
+  bounds the interfaces one datagram can turn into metrics, and `max_counter_interfaces` (default 4096)
+  the interfaces tracked per exporter (an Ethernet-only sample counts as an interface too).
+  `counter_metrics_per_exporter_eps` (default 20000, burst one second, at least 64) bounds the metric
+  events one exporter may make per second. It is a bucket of its own, charged per event (an interface is
+  15 to 16 events, 12 more with the Ethernet record), so counter metrics and flow records
+  (`per_exporter_rps`) never take each other's budget; an interface that does not fit is dropped whole.
+  A value of `0` means the default, never "unlimited". At the defaults an exporter sending 256 interfaces
+  with Ethernet records every 30 seconds is about 240 events per second (about 140 without the Ethernet
+  record).
+* **Edges**: an edge that runs the flow input does the same and streams the events upstream like any
+  other event (they count against the edge's metric rate cap, `seshat_edge_metric_*`).
+* **Metrics**: `seshat_flow_counter_metrics_total` (events made) and
+  `seshat_flow_counter_metrics_dropped_total{reason}` (interfaces left out: `datagram_limit`,
+  `interface_limit`, `rate_limit`).
 
 ## Event fields
 

@@ -72,10 +72,13 @@ credentials without TLS` and a warning is logged. Turn TLS on for the target, or
 trusted link, set `insecure: true` on the target ("Allow sending the username and password without
 TLS" in the UI); Seshat then connects and logs a warning that the credentials travel in clear text.
 
-**Run on.** A target is dialled by exactly one collector: `run_on` is `server` (the default) or
-`edge:<id>`. The edge gets the target, its credentials and TLS material sealed in its configuration
+**Run on.** A target is dialled by exactly one collector: `run_on` is `server` (the default),
+`edge:<id>` or `group:<id>`. The edge gets the target, its credentials and TLS material sealed in its configuration
 (see below); the server stops dialling at once and shows the target with its owner. Moving a target is a
-hand-over without overlap, see [Streaming telemetry on an edge](#streaming-telemetry-on-an-edge).
+hand-over without overlap, see [Streaming telemetry on an edge](#streaming-telemetry-on-an-edge). With `group:<id>` the
+server assigns the target to one healthy member of that [edge group](../edge.md#edge-groups) and moves it to another when
+the member stays away; the status shows the group as the owner and the member. A target is named in its group by its name,
+so a rename is a delete and a create, and a target new to a group waits a lease before it is dialled.
 
 A session that ends (network, device reboot, reset) is retried with exponential backoff, 1 s
 doubling to 60 s with jitter, reset once a session has delivered data. The Telemetry page shows per
@@ -165,7 +168,8 @@ upstream. Full operator guide: [`../edge.md`](../edge.md#streaming-telemetry).
   [Unknown services](#unknown-services-and-the-capture-diagnostic); `dialout_capture_dir` turns on the
   capture diagnostic on the edge.
 * **Dial-in from the edge.** In Inputs, Telemetry, give the target *Run on* an edge (`run_on`:
-  `edge:<id>`). The edge dials it from its own network. Passwords and client keys are sent to that edge
+  `edge:<id>`), or an edge group (`group:<id>`, one of the group's healthy members dials it; the target form shows which). The edge dials
+  it from its own network. Passwords and client keys are sent to that edge
   only, are never written to `edge.json` and are kept encrypted on the edge.
 * **The events.** Samples are `seshat.metric` events stamped with the edge's site, VRF and id
   (`seshat.source.edge`), queued on the edge's disk while the link is down, and handled on the server

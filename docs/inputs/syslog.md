@@ -108,27 +108,32 @@ For a timestamp without a zone Seshat picks the zone of the sender, first match 
 2. **Device record** (`time_zone` of the device in the knowledge base, found by the sender's address):
    set by hand when you adopt a device, filled from the NetBox connector (the `time_zone` of the
    device's site), or a `time_zone` column of a CSV or HTTP connector.
-3. **Hostname**, only when the sender's address is neither named by a rule nor owned by a *known*
-   device (inventory or operator entered; a stub the gateway made for an address it saw does not
-   count): a hostname rule of the input (`time_zones` with the name in the message header, exact or
-   `*.example.com`), then the device record that carries that name. This is for traffic that arrives
-   through a relay, where every sender has the relay's address.
+3. **Hostname rule** of the input (`time_zones` with the name in the message header, exact or
+   `*.example.com`). It applies to every sender that has no zone of its own from steps 1 and 2,
+   including a sender whose address belongs to a known device whose record carries no zone: a switch
+   that is tracked and also sends under the names of the devices behind it still gets the rule.
+   Then, only when the sender's address is neither named by a rule nor owned by a *known* device
+   (inventory or operator entered; a stub the gateway made for an address it saw does not count),
+   the device record that carries that name. This is for traffic that arrives through a relay,
+   where every sender has the relay's address.
 4. **Site** (`site_time_zones`): the zone listed for the device's inventory site, or for the input's own
    site when the device is not in the inventory (an untagged input is the site `default`). Names are
    compared without regard to case.
 5. **`assume_tz`** (`SESHAT_SYSLOG_ASSUME_TZ`), default `UTC`; or `auto`, below.
 
-An explicit rule outranks the device record on purpose: it is the operator's override for a device
-whose inventory entry is wrong. All lookups are reads of tables held in memory; changing the rules
+An address rule outranks the device record on purpose: it is the operator's override for a device
+whose inventory entry is wrong. A hostname rule does not: it ranks below a zone on the device record. All lookups are reads of tables held in memory; changing the rules
 takes effect at once, and a zone name is loaded once and then served from memory.
 
-**The hostname in the header is written by the sender.** That is why step 3 exists only for
-addresses nothing knows: a device with a rule or an inventory record keeps its own zone whatever
-name it writes, so it cannot borrow another device's zone by claiming its name. What a stranger can
-do with a claimed name is limited to its own events, and their timestamps still have to be plausible
-(not more than a day ahead of the receive time, nor more than a year old) to be used as `@timestamp`.
-A relay that is itself a known device in the inventory therefore gets no hostname rules: leave the
-relay out of the inventory (or out of the zone-bearing part of it).
+**The hostname in the header is written by the sender.** That is why a zone you set for an address
+(a rule, or the `time_zone` of its device record) always wins over it, and why the device record
+that carries a name is read only for addresses nothing knows: a device cannot borrow another
+device's *inventory* zone by claiming its name. A hostname rule is your own table, so a sender can
+only choose among the zones you listed, for its own events, and their timestamps still have to be
+plausible (not more than a day ahead of the receive time, nor more than a year old) to be used as
+`@timestamp`. A relay that is itself a known device in the inventory gets the hostname *rules*, but
+not the inventory zones of the devices behind it: leave the relay out of the inventory if you need
+those.
 
 Prefer IANA names (`America/Los_Angeles`) over offsets (`-08:00`): a name follows the daylight saving
 changes, an offset does not. The reading is converted with the rules of that day. When the clocks

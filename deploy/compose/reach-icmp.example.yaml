@@ -1,0 +1,28 @@
+# ICMP echo for the Device Tracker's reachability probes (docs/device-tracker.md, "Reachability"). It is an override
+# file: it changes nothing else about the service, which keeps running read-only, as uid 65532, with every capability
+# dropped and no new privileges.
+#
+#   docker compose -f compose.yaml -f deploy/compose/reach-icmp.example.yaml up -d
+#   (an edge: -f compose.edge.yaml -f deploy/compose/reach-icmp.example.yaml, with the service name below set to seshat-edge)
+#
+# Without this file the probes still run, with the SNMP check only, and the Tracked devices page and
+# GET /api/tracker/status say "icmp unavailable: ..." with the reason.
+#
+# net.ipv4.ping_group_range is namespaced per container: it lets the listed groups open an unprivileged ICMP datagram
+# socket and widens nothing on the host. The range is the service's own group only, "65532 65532" (the image's
+# uid/gid): a wide range such as "0 2147483647" is refused with EINVAL when the container runs in a user namespace
+# (rootless Docker, userns-remap), because the range may only name gids that are mapped there, and it grants the
+# socket to groups that have no use for it. If you run the service as another gid, use that. The alternative is
+# cap_add: [NET_RAW] (a raw socket); the sysctl is the smaller grant.
+services:
+  seshat:
+    sysctls:
+      net.ipv4.ping_group_range: "65532 65532"
+    # The probes are on by default (60 s, three failed probes before down); the settings are in the tracker settings.
+    # Optional, instance-wide:
+    # environment:
+    #   SESHAT_TRACKER_REACH: "0"             # turns the probes off on this instance whatever the settings say
+    #   SESHAT_TRACKER_REACH_COUNT: 3         # echoes per probe
+    #   SESHAT_TRACKER_REACH_TIMEOUT: 2s
+    #   SESHAT_TRACKER_REACH_INTERVAL: 60s    # seeds the setting at the first start only
+    #   SESHAT_TRACKER_REACH_DOWN_AFTER: 3    # seeds the setting at the first start only

@@ -29,6 +29,7 @@
             "seshat.tracker",
             "seshat.device",
             "seshat.metric",
+            "seshat.reachability",
             "seshat.passthrough"
           ]
         }
@@ -200,6 +201,28 @@
       },
       "then": {
         "$ref": "#/$defs/dataset_metric"
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "event"
+        ],
+        "properties": {
+          "event": {
+            "required": [
+              "dataset"
+            ],
+            "properties": {
+              "dataset": {
+                "const": "seshat.reachability"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/dataset_reachability"
       }
     },
     {
@@ -3494,11 +3517,22 @@
                     "gnmi",
                     "mdt",
                     "jti",
-                    "os10"
+                    "os10",
+                    "snmp",
+                    "reach",
+                    "sflow"
                   ]
                 },
                 "subscription": {
                   "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "counter",
+                    "gauge",
+                    "state"
+                  ]
                 }
               },
               "required": [
@@ -3528,7 +3562,391 @@
         "observer",
         "seshat"
       ],
-      "$comment": "seshat.metric: streaming telemetry samples (gNMI, Cisco MDT, Juniper JTI, Dell OS10): one document per leaf value."
+      "$comment": "seshat.metric: streaming telemetry samples (gNMI, Cisco MDT, Juniper JTI, Dell OS10) and SNMP-polled metrics: one document per value."
+    },
+    "dataset_reachability": {
+      "type": "object",
+      "properties": {
+        "@timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ecs": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "const": "8.11.0"
+            }
+          },
+          "required": [
+            "version"
+          ]
+        },
+        "data_stream": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "logs"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.reachability"
+            },
+            "namespace": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$",
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "type",
+            "dataset",
+            "namespace"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "labels": {
+          "type": "object"
+        },
+        "event": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "event",
+                "metric",
+                "state"
+              ]
+            },
+            "category": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "action": {
+              "type": "string"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.reachability"
+            },
+            "module": {
+              "type": "string",
+              "const": "seshat"
+            },
+            "id": {
+              "type": "string"
+            },
+            "created": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "ingested": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "severity": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 7
+            }
+          },
+          "required": [
+            "kind",
+            "category",
+            "dataset",
+            "module",
+            "id",
+            "created"
+          ]
+        },
+        "observer": {
+          "type": "object",
+          "properties": {
+            "vendor": {
+              "type": "string"
+            },
+            "product": {
+              "type": "string",
+              "const": "Seshat"
+            },
+            "version": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "gateway"
+              ]
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "vendor",
+            "product",
+            "version"
+          ]
+        },
+        "host": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "related": {
+          "type": "object",
+          "properties": {
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            },
+            "hosts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "seshat": {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+$"
+            },
+            "source": {
+              "type": "object",
+              "properties": {
+                "listener": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "string",
+                  "enum": [
+                    "snmp",
+                    "syslog",
+                    "flow",
+                    "poller",
+                    "edge",
+                    "telemetry"
+                  ]
+                },
+                "site": {
+                  "type": "string"
+                },
+                "vrf": {
+                  "type": "string"
+                },
+                "edge": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "device": {
+              "$ref": "#/$defs/shared_seshat_device"
+            },
+            "enrichment": {
+              "type": "object",
+              "properties": {
+                "level": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "partial",
+                    "full"
+                  ]
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "kb_observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "backfilled": {
+                  "type": "boolean"
+                },
+                "fields": {
+                  "type": "object"
+                },
+                "origins": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              },
+              "required": [
+                "level"
+              ],
+              "additionalProperties": false
+            },
+            "route": {
+              "type": "object",
+              "properties": {
+                "matched": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "destinations": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "reachability": {
+              "type": "object",
+              "properties": {
+                "check": {
+                  "type": "string",
+                  "enum": [
+                    "icmp",
+                    "snmp",
+                    "device"
+                  ]
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "up",
+                    "down"
+                  ]
+                },
+                "previous_state": {
+                  "type": "string",
+                  "enum": [
+                    "up",
+                    "down",
+                    "unknown"
+                  ]
+                },
+                "since": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "down_for_s": {
+                  "type": "integer"
+                },
+                "rtt_ms": {
+                  "type": "number"
+                },
+                "loss_pct": {
+                  "type": "number"
+                },
+                "uptime_s": {
+                  "type": "integer"
+                },
+                "previous_uptime_s": {
+                  "type": "integer"
+                },
+                "error": {
+                  "type": "string"
+                },
+                "basis": {
+                  "type": "string"
+                },
+                "cause": {
+                  "type": "string"
+                },
+                "probed_by": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "check",
+                "state"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "schema_version",
+            "device",
+            "enrichment",
+            "reachability"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "@timestamp",
+        "ecs",
+        "data_stream",
+        "event",
+        "observer",
+        "seshat"
+      ],
+      "$comment": "seshat.reachability: device reachability state changes (down, up, restarted) from the Device Tracker's ICMP and SNMP probes."
     },
     "dataset_passthrough": {
       "type": "object",

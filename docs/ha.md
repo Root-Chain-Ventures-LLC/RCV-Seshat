@@ -5,6 +5,12 @@ Seshat runs as one box or as a cluster. This page is the operator's guide to **m
 [below](#mode-3-bgp-anycast)). **Mode 4** (external load balancer, Kubernetes) is [below](#mode-4); the
 cluster-wide rules below apply to all four.
 
+This page is about **server nodes**. The edge collectors of an [edge group](edge.md#edge-groups) can share a receiving address
+with the same VRRP engine (modes 1 and 2, no BGP and no drain), but it is configured per group on the server, runs on the edges
+and has its own health signals, key, ceiling and capabilities: see
+[VRRP on the edges of a group](edge.md#vrrp-on-the-edges-of-a-group). The wire format, the failover timers and the differences from RFC 5798 below are the
+same there.
+
 | Mode | Mechanism | What the network must provide | Covered here |
 |---|---|---|---|
 | 1. Active/standby | built-in VRRP, one floating address, health-driven | a shared L2 segment, multicast allowed | yes |
@@ -128,12 +134,12 @@ SQLite: the peer protocol), so you configure once.
 | Field | Meaning |
 |---|---|
 | `name` | label, lower-case letters, digits, `-` `_` |
-| `vrid` | virtual router ID 1-255, **unique per instance and per VLAN**: another VRRP speaker (a router pair) using the same VRID on the segment would interfere |
+| `vrid` | virtual router ID 1-255, **unique per instance and per VLAN**: another VRRP speaker (a router pair) using the same VRID on the segment would interfere. So would an [edge group's](edge.md#vrrp-on-the-edges-of-a-group) VRRP: do not give a server instance the VRID of an edge group whose members share its segment (the group's status warns about a VRID the cluster uses) |
 | `interface` / `interfaces` | interface name; empty means "the interface whose subnet contains the first virtual address" (this is right for nearly everyone). `interfaces` overrides per node name when interface names differ (`eth0` here, `ens18` there) |
 | `vips` | 1 to 20 addresses, one family per instance (use two instances for IPv4 and IPv6) |
 | `priorities`, `default_priority` | base priority 1-254 per **node name**; a node not listed uses `default_priority` (100) |
 | `preempt` (default true) | a higher priority node takes the address back; also lets a backup take it from a master whose priority has dropped. Health-driven failover needs it |
-| `preempt_delay_ms` | wait this long before preempting a lower priority master (default 0: at once) |
+| `preempt_delay_ms` | wait this long before preempting a lower priority master (default 0: at once). A backup that keeps hearing the lower priority master restarts its master-down timer with every advertisement, so the delay is honoured however long it is; a master that stops advertising during the wait is replaced after the usual master-down interval |
 | `advert_interval_ms` | 100 to 40950 in steps of 10; default 1000 |
 | `auth` | sign advertisements, see below |
 
@@ -283,7 +289,7 @@ Enable it by setting, on every node (the same values except the peer lists):
 ```
 SESHAT_NODE_NAME=node-a
 SESHAT_CLUSTER_SECRET=<16+ characters, identical on every node>
-SESHAT_CLUSTER_PEERS=http://192.0.2.12:8080          # the other nodes' API addresses, comma separated
+SESHAT_CLUSTER_PEERS=http://192.0.2.12:8080          # the nodes' API addresses, comma separated; an entry equal to SESHAT_CLUSTER_ADVERTISE is skipped
 SESHAT_CLUSTER_ADVERTISE=http://192.0.2.11:8080      # this node's own address (shown to the peers)
 SESHAT_SECRET_KEY=<identical on every node>
 ```
@@ -646,6 +652,20 @@ telemetry. After install, look at the Dashboard tile and `GET /api/ready` (with 
 A replica's local disk queue is unavailable while its pod is down (the optional shared message bus in
 `outputs.md` removes that). Mode 4 does not make the balancer itself highly available; that is the
 balancer's job (two MetalLB speakers, a keepalived pair, the cloud provider).
+
+## Edge HA
+
+The edge collectors have their own high availability, set up on the server for a group of edges rather than on the server nodes.
+It uses the VRRP engine described on this page between edges on one segment, and adds what a server node does not need: the
+server assigns the polling, the telemetry dial-in targets, the relay and SNMP reads to one healthy member and moves them when a member
+stays away. Read [Edge HA](edge.md#edge-ha) for what a group is, a worked example of three edges and one address, what moves and
+how fast, and the trade-offs. The parts that differ from the server's HA:
+
+- No BGP mode and no drain. The members take modes 1 and 2 only, configured per group with `PUT /api/edge-groups/{id}/vrrp`.
+- The advertisement key is the group's own, made by the server and served to the members; it is not the cluster secret.
+- Health comes from the edge's own server link, queue age and listeners ([penalties](edge.md#vrrp-on-the-edges-of-a-group)).
+- A VRID must not be used by both a server cluster instance and an edge group whose members share its segment (the group's status warns).
+- Edge groups need PostgreSQL or a single SQLite node: a SQLite node that syncs with peers refuses them.
 
 ## Metrics, API and the page
 

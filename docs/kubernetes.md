@@ -175,6 +175,40 @@ the PVCs (`persistence.retentionWhenScaled: Retain`), so scaling back up resumes
 With BGP, the router's ECMP hash keeps one sender on one node, which keeps per-sender state local;
 adding or removing a node re-hashes some senders (the shared database and KB make that harmless).
 
+## Several replicas and edges
+
+An edge holds its control connection to one pod. Without the peer protocol only that pod can reach the edge, so
+the edge relay, poll-now and SNMP reads answer `edge_offline` on the other replicas, depending on where the request
+lands. Turn the peers on so any replica can find the pod that holds the edge
+([The edge relay across nodes](ha.md#the-edge-relay-across-nodes)):
+
+```bash
+kubectl create secret generic seshat-cluster --from-literal=SESHAT_CLUSTER_SECRET="$(openssl rand -hex 32)"
+helm upgrade seshat deploy/helm/seshat --reuse-values \
+  --set cluster.enabled=true --set cluster.secret.existingSecret=seshat-cluster
+```
+
+- Every replica gets the same peer list, one URL per replica from `replicaCount`, and advertises its own name, both
+  by the headless Service: `http://<pod>.<release>-seshat-headless.<namespace>.svc:8080`. A replica skips its own
+  entry. Change the replica count with `helm upgrade`: `kubectl scale` leaves the list behind.
+- The headless Service then publishes pods that are not ready, because such a pod can still hold an edge. Prometheus
+  scrapes those pods too.
+- `cluster.allowPlainRelay` is on by default because the generated URLs are plain `http://` and Seshat otherwise
+  refuses to forward relay sessions over them. The peer protocol is signed but not encrypted. If the pod network
+  isn't private enough, turn it off and list `https://` URLs in `cluster.peers`.
+- `cluster.peers` replaces the generated list. Use it for `https://` URLs, or to add nodes outside this release.
+- With a default-deny NetworkPolicy, set `cluster.networkPolicy.enabled=true` to let the replicas reach each other on
+  the API port. The pods also need DNS, as they already do for the database. Leave it off in a namespace with no other
+  policy: any NetworkPolicy isolates the pods it selects, so this one alone would block everything else.
+  `deploy/k8s/examples/networkpolicy.yaml` carries the same rules.
+- `roles.split=true` is refused. The console pods take the edge and API traffic, and as a Deployment they have no
+  per-pod DNS names. Run one console replica there, or use `roles.split=false`.
+- A pod on a release that doesn't skip its own URL still works, but its Cluster page shows
+  `this node lists itself as a peer` for that entry.
+
+Check it on **Cluster** in the UI or with `GET /api/cluster`: each peer shows `up`. A wrong `SESHAT_CLUSTER_SECRET`
+shows as a 401, a blocked port as a connection error.
+
 ## Without a load balancer: host network
 
 `intake.hostNetwork.enabled: true` runs the pods in the node's network namespace. Trade-offs:

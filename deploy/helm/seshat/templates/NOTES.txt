@@ -66,6 +66,16 @@ Device Tracker portal ({{ .Values.portal.mode }} mode):
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "seshat.fullname" . }}-device-tracker 8081:80
 {{- end }}
 {{- end }}
+{{- if and (gt (int .Values.replicaCount) 1) (not .Values.cluster.enabled) }}
+
+EDGES: with {{ .Values.replicaCount }} replicas and cluster.enabled=false, the edge relay, poll-now and SNMP reads answer edge_offline
+  on every replica except the one holding the edge's control connection. See docs/kubernetes.md, Several replicas and edges.
+{{- end }}
+{{- if and .Values.cluster.enabled (not .Values.cluster.networkPolicy.enabled) }}
+
+CLUSTER PEERS: with a default-deny NetworkPolicy in this namespace, set cluster.networkPolicy.enabled=true so the replicas
+  can reach each other on port {{ .Values.ui.containerPort }}. Check the peers on the Cluster page or with GET /api/cluster.
+{{- end }}
 {{- if ne .Values.database.mode "none" }}
 
 Migrations: the pre-install / pre-upgrade hook Job {{ include "seshat.fullname" . }}-migrate ran `seshat store migrate` once before the pods started.

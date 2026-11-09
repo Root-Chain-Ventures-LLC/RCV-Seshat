@@ -30,7 +30,7 @@ The three can be installed side by side.
 
 `seshat-device-tracker` has the binary, its unit, `/etc/seshat/device-tracker.env` and its doc directory.
 `seshat-edge` has the binary as `/usr/bin/seshat-edge`, its unit, `/etc/seshat/edge.env`, its own copy of the
-packs under `/usr/share/seshat-edge/packs` (a fallback until the server's packs arrive), the relay drop-in and
+packs under `/usr/share/seshat-edge/packs` (a fallback until the server's packs arrive), the relay and VRRP drop-ins and
 its doc directory.
 
 The install scripts:
@@ -127,6 +127,8 @@ that adds exactly that, on top of the unit's own settings:
 | VRRP, HA modes 1 and 2 ([`ha.md`](ha.md)) | `CAP_NET_ADMIN`, `CAP_NET_RAW`, `AF_PACKET` | `vrrp.conf` |
 | Anycast with BGP, HA mode 3 | `CAP_NET_ADMIN` (addresses on the loopback, TCP-MD5) | `anycast-bgp.conf` |
 | Raw relay with `preserve_source` ([`outputs.md`](outputs.md)) | `CAP_NET_RAW` | `nms-relay-preserve-source.conf` (also for `seshat-edge`) |
+| ICMP echo of the [reachability probes](device-tracker.md#reachability) | `CAP_NET_RAW`, or instead the host sysctl `net.ipv4.ping_group_range = <gid> <gid>` with the gid of the service group (no capability) | `nms-relay-preserve-source.conf` (it grants `CAP_NET_RAW`; also for `seshat-edge`) |
+| VRRP on an edge group member ([`edge.md`](edge.md#vrrp-on-the-edges-of-a-group)) | `CAP_NET_ADMIN`, `CAP_NET_RAW`, `AF_NETLINK`, `AF_PACKET` | `edge-vrrp.conf`, in `/usr/share/seshat-edge/systemd/drop-ins/`, for `seshat-edge` only |
 
 Install one by copying it into the unit's drop-in directory:
 

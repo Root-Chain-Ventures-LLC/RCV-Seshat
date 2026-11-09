@@ -83,16 +83,17 @@ After **3 consecutive failures** the device is marked `paused` and polled with e
 backoff (the interval doubles per further failure, capped at 6 h) until a poll succeeds. The status
 and the last error are on the Tracked devices page.
 
-Limits per device: `SESHAT_TRACKER_RATE` requests per second (default 50), a PDU budget per
+Limits per device: `SESHAT_TRACKER_RATE` requests per second (default 50) **shared by the tracker poll and
+the metrics poll of that device** (one budget per device, whichever class asks), a PDU budget per
 collector, a 5 minute timeout per collector, `SESHAT_TRACKER_WORKERS` device polls at a time
-(default 4). `SESHAT_TRACKER_POLL=0` turns the pollers off on an instance. To spread polling over
+(default 4; the metrics class has a pool of its own, `SESHAT_TRACKER_METRIC_WORKERS`, default 4). `SESHAT_TRACKER_POLL=0` turns the pollers off on an instance. To spread polling over
 replicas, give each one `SESHAT_TRACKER_SHARD=i/n`: a device is polled by the instance whose index
 equals the hash of the device id modulo n.
 
 ### Polled by the server or by an edge
 
-A device is polled by **one** poller: this server (the default) or an [edge](edge.md#polling-on-the-edge) on the
-device's network. The setting is per site, with a per-device override (Tracked devices, *Who polls the devices*; the
+A device is polled by **one** poller: this server (the default), an [edge](edge.md#polling-on-the-edge) on the
+device's network, or an [edge group](edge.md#edge-groups) of such edges, which assigns the device to one of its members. The setting is per site, with a per-device override (Tracked devices, *Who polls the devices*, which also lists the edge groups of the site; the
 `polled-by` routes in the API), and the Tracked devices page and `GET /api/tracker/devices` show the owner of each device
 (`owner`). Whoever owns a device polls it with these same packs, intervals, spreading and backoff, and the result is stored
 the same way; the status columns (last poll, error, failures, next poll) are written by whoever polled. A server that does
@@ -126,6 +127,217 @@ as a poll warning and the other VLANs still load.
 
 For VRF-aware ARP (`per-vrf-context`), list the VRF names on the device; SNMPv3 uses the VRF name as
 the context name, SNMPv1/v2c needs a community per VRF (`name=community`).
+
+## SNMP metric polling
+
+Besides the MAC tables, the poller can read **metrics** from the same devices: interface traffic, errors and status, CPU,
+memory, temperature, power supplies, fans and optics. They are the way to get counters from devices that cannot stream
+telemetry or export flows, and they leave as `seshat.metric` events in the shape streaming telemetry produces
+(`seshat.metric.source` is `snmp`), so every metric destination (Prometheus remote write, InfluxDB, OTLP) and every
+route that matches `event.dataset == "seshat.metric"` takes them unchanged. Counters are sent raw (64 bits where the
+device has them, `seshat.metric.kind: counter`); take the rate in your backend.
+
+**One form for interface metrics.** An interface series has the same form whichever input made it (SNMP polling, sFlow
+counter samples ([`inputs/flows.md`](inputs/flows.md)), gNMI): the keyed path
+`/interfaces/interface[name=<if>]/state/counters/in-octets`, the single label `interface`, a `kind`, and the name
+`ifName`, else `ifDescr`, else the ifIndex. The pack writes the keyless path (`interfaces/interface/state/...`); the
+event carries it with the interface as the key. `host` comes from `host.name` (the inventory name of the device) and
+`site` from the device's scope, so an interface counter read by SNMP and by sFlow from the same device is the same
+Prometheus series (same name, same `host`, `interface` and `site` labels); only `seshat.metric.source` differs.
+
+**Turn it on per device** (Tracked devices, *Settings*, *Metrics*, or `PUT /api/tracker/devices/{id}` with
+`metrics_enabled`). The device must be tracked (enabled) and a metric binding must apply to it. It is off by default, so an
+upgrade adds no polling.
+
+| Setting | Meaning |
+|---|---|
+| `metrics_interval_seconds` | 0 is the class default of 60 s; 30 s to 24 h. Spread and jittered like the other classes. |
+| `metrics.include`, `metrics.exclude` | Glob patterns (`*`, `?`, case-insensitive) on the interface name: with `include` only matching interfaces are polled, `exclude` removes matches. They apply to every per-interface series, state included. |
+| `metrics.up_only` | Leaves out the counters and gauges of interfaces that are not oper-up; their oper-status series is still sent, so a down port stays visible. |
+| `metrics.max_series` | The cap on series per poll (default 10000, 10 to 100000). State and health series (oper and admin status, CPU, memory, sensors) are kept first, then interface counters, cut by whole interface in ifIndex order, so an interface never has half its counters. A poll over the cap reports `partial` with the number left out (`last_metrics_dropped`, `seshat_tracker_metric_series_dropped_total{reason="capped"}`). |
+
+**Site defaults and bulk changes.** For a fleet, set the metrics once per site: `PUT /api/tracker/metrics/defaults`
+(`{"sites": {"<site>": {"enabled", "interval_seconds", "metrics": {...}}, "*": {...}}}`; the key `*` covers every site without
+an entry; the Tracked devices page has the editor under *Metrics defaults*; audited as `tracker.metrics.defaults.update`).
+A tracked device that has no metrics settings of its own follows its site's entry and shows `metrics_inherited`; the first
+setting saved on the device makes its settings its own (`metrics_override`), and `metrics_inherit: true` gives it back to the
+site. Edges are served the effective settings with the device assignment, so a change reaches them in their configuration.
+`PUT /api/tracker/metrics/bulk` changes many devices at once: name `device_ids`, or a `selector` with a `site` (and optionally
+`role` and `class`), plus the settings to apply or `metrics_inherit`; with `"dry_run": true` it only counts (`matched`,
+`changed`, and the `skipped` devices with the reason: not tracked, no metric binding).
+
+**What runs.** The *metrics class* is a second scheduler beside the tracker class. It runs only the metric collectors
+(the `metric` emit of the pack format), not the 10-minute tracker collectors, and has its own cadence, failures, backoff and pause
+(three failures in a row, then doubling, capped at **5 minutes** for this class; the tracker class still caps at 6 hours): a
+device whose metric tables time out is not paused for tracking and the other way round.
+
+**Time limits of a metrics poll** (not the tracker's 5 minutes per collector): the whole poll has a deadline of 45 s, never
+more than the interval, and a poll that runs into it fails with that message. If the first request of the first collector
+gets no answer the device is marked unreachable for this cycle and the other collectors are skipped (one timeout, not one per
+table). A poll that takes longer than its interval is reported `partial` with "overrun" and counted
+(`seshat_tracker_metric_overruns_total`). The workers of the metrics class are a pool of their own
+(`SESHAT_TRACKER_METRIC_WORKERS`, default 4), so slow metric polls cannot starve the tracker polls.
+
+**Counter width.** The 64-bit interface counters are read first. Only when the device answers the high-capacity table with
+nothing (no such object, end of view, empty) and no error are the 32-bit counters used, and the device stays on them (a series
+never changes width because of a lost packet) until the 64-bit table answers again; it is asked again every 20th poll. A walk
+that fails makes the poll `partial` with the error, never `ok`, and the 32-bit collector is not run. A vendor collector that
+replaces a standard one (the Cisco processor view for `hr-cpu`) does so only when it returned series in that poll, so a model
+without the vendor MIB keeps the standard collector. Interfaces are labelled by ifName, else ifDescr, else the ifIndex; two
+interfaces with the same label are reported (`seshat_tracker_metric_label_collisions_total`, and the poll is `partial`). The standard pack reads IF-MIB (64-bit counters, with a 32-bit fallback for devices without
+them; errors and discards; oper and admin status; `ifHighSpeed`), HOST-RESOURCES-MIB (processor load, memory and disk),
+ENTITY-SENSOR-MIB (temperature, voltage, current, power, fan speed and optical power, with scale and precision applied,
+labelled by `entPhysicalName`) and UCD-SNMP-MIB (load, memory, CPU, for Linux-based devices such as EdgeOS and OS10).
+Vendor packs add Cisco, Juniper, Dell OS9, Fortinet, Palo Alto and Ubiquiti EdgeSwitch; see their READMEs for what is
+untested on real hardware. A request budget applies as it does for the tracker: the same rate limit, PDU budget and
+read-only session.
+
+**Status.** Each device shows the last metrics poll, its status, its error and the number of series on the Tracked
+devices page and in `GET /api/tracker/devices` (`last_metrics_at`, `last_metrics_status`, `last_metrics_error`,
+`last_metrics_series`, `metrics_failures`, `next_metrics_at`, and the effective `metrics_interval_seconds` and
+`metric_collectors` of the entry). Prometheus: `seshat_tracker_metric_polls_total{result}` (ok, partial, error) and
+`seshat_tracker_metric_series` on the server; an edge exports `seshat_edge_poll_metric_polls_total{result}`,
+`seshat_edge_poll_metric_series` and `seshat_edge_poll_metric_samples_total`.
+
+**Who polls.** The same poller that owns the device for tracking: the server, an edge, or a member of an edge group
+(docs/edge.md, "Polling on the edge"). There is one metrics poller per device at any time; a metrics poll on a group
+member stops, and sends nothing, when the group lease ends.
+
+**A hand-over stops the old poller.** The server cancels a metrics (or tracker) poll it is running when the device is handed to
+an edge, and the stream receiver drops SNMP metric samples from an edge that is not the device's poller (counting
+`seshat_edge_metric_samples_not_owner_total`), allowing the hand-over grace for a poll that ran across it.
+
+Not covered: a device that is not tracked (metrics ride on tracking), SNMP traps for the same events, and rates
+(counters are raw; OTLP carries every value as a gauge, so take the rate downstream).
+
+## Reachability
+
+Seshat also tells whether a tracked device is **up**. Every enabled tracked device is probed at a short interval by
+the poller that owns it, with two checks:
+
+- **ICMP echo**: `SESHAT_TRACKER_REACH_COUNT` echo requests (default 3), one every 100 ms, and a wait of
+  `SESHAT_TRACKER_REACH_TIMEOUT` (default 2 s) for the last reply. The result is up (any reply), the average
+  round-trip time and the loss in percent. A reply counts when its identifier, sequence and random payload are ours,
+  from whatever address it comes (a device with several addresses, or a router, may answer from another one).
+- **SNMP up**: one `sysUpTime.0` GET with the device's own credential profile (the profile polling uses, through
+  the same read-only session, target rules and per-device rate limit). It answers whether the device talks SNMP
+  and gives its uptime, so an **uptime that goes backwards is a restart**.
+
+**On by default**, with an interval of **60 s** and **3** failed probes in a row before a device is called down. The
+settings are in the tracker settings (Tracked devices, *Settings and data*, *Reachability probes*; `GET`/`PUT
+/api/tracker/settings`, section `reach`, audited as `tracker.settings.update`): on or off, the interval (10 s to
+1 h), the failures before down (1 to 10), and an **override per site** of the three (the site is the device's
+knowledge-base scope site, as for *Polled by*). The first start of a deployment seeds them from
+`SESHAT_TRACKER_REACH_INTERVAL` and `SESHAT_TRACKER_REACH_DOWN_AFTER` (on, never off), and only when the stored
+tracker settings were read successfully and hold no reach section: a failing read changes nothing and is tried again at
+the next start. After that the stored settings are the truth. `SESHAT_TRACKER_REACH=0` is not a setting and is never
+stored: it only turns the probes off on that instance whatever the settings say (the instance stops probing and stops
+serving them to edges), and the other instances go on. `SESHAT_TRACKER_REACH_COUNT`, `_TIMEOUT` and `SESHAT_TRACKER_REACH_CHECKS` (`icmp`, `snmp` or `icmp,snmp`, the
+default) stay the instance's. The settings reach the edges with the rest of their configuration, and a change is
+applied at the edge's next sync. Probes are **spread** like the poll classes, by a stable offset per device inside the
+interval, and are checked for being due every 5 s, so the effective interval is a multiple of 5 s.
+
+A device is probed by one poller only, the one that owns it ([above](#polled-by-the-server-or-by-an-edge)): the
+server, an edge, or the member of an edge group that holds it. A probe follows exactly the rules of a scheduled
+poll: it is not made while another poller may still own the device (a hand-over settling), it is not made without a
+valid lease, and a probe that is running when an edge group's lease ends is cancelled and reports nothing: nothing is
+sent to the device once the right to probe it has ended, not an echo and not an SNMP request, even one that was
+waiting for its slot in the device's rate limit ([edge.md](edge.md#reachability-probes)).
+
+**State.** A device is `up` when any check answered and `down` when at least one check was made and none answered. A
+check that could not be made (refused by a safety rule, ICMP unavailable, no SNMP credential, a local error) is no
+evidence either way and changes nothing. An SNMP answer that carries no usable uptime (an error response,
+noSuchObject, a rejected SNMPv3 user, a value of the wrong shape) means the device answered: it is alive, the
+`snmp/up` sample is 0 and the state is not down. Only **silence** counts as a failure of the SNMP check. A refused connection (ICMP port unreachable: a host is there and nothing listens on the SNMP port) is an answer, so the device is alive; "no route to host" and "network unreachable" are silence. A wrong SNMPv2c
+community is silence too, and cannot be told from a device that is down. A device is called down after
+`down_after` probes in a row failed, up again at the first probe that is answered. A first probe that finds the device up
+is a baseline and makes no event; one that finds it down makes `device-down` once the failures needed have been seen.
+
+When **ICMP is unavailable** (or switched off) the verdict rests on SNMP alone: the device is down only after `down_after`
+probes in a row met silence, and the event says `basis: snmp-only`, with the words "seen by SNMP only" in its message. A
+wrong community, a firewall that drops SNMP from the poller, or an agent that is down all look the same then. A device that
+answers ICMP while SNMP fails is up: its samples show `snmp/up` 0, and there is no event for that.
+
+The state lives on the server, in the database, whichever poller probes: a restart, a failover of the server, and a
+hand-over of the device from one poller to another all continue the same state, and do not make events of their own. A
+state change is announced once: the node that sees it writes it to the row of the device with a compare-and-set on a
+sequence number and emits the event only if that write wins, so two replicas that see the same change, or a restart that
+sees it again, do not both announce it; when the write fails nothing is announced and the change is found again by the
+next probe. A result that is not newer than the last from the same poller (or is older than the last from any) is dropped.
+Seshat does not evaluate thresholds or run alerts: what to do about a state change is for the routes and the systems they feed.
+
+**Samples**, one `seshat.metric` event per measurement of every probe, in the shape the
+[metric destinations](outputs.md) read, so Prometheus remote write, InfluxDB and OTLP take them unchanged
+(`seshat.metric.source` is `reach`; the destinations label a sample with the device's `host` and `site`):
+
+| Path | Type | Meaning |
+|---|---|---|
+| `/reachability/icmp/up` | bool | any echo answered |
+| `/reachability/icmp/rtt-ms` | double | average round trip of the answered echoes, only when up |
+| `/reachability/icmp/loss-pct` | double | share of unanswered echoes |
+| `/reachability/snmp/up` | bool | the sysUpTime read was answered with a value |
+| `/reachability/snmp/uptime-s` | uint64 | the device's uptime in seconds, only when up |
+
+A check that was not made produces no sample. At the default interval a device with both checks makes five samples
+every 60 s; size the metric destinations for that times the number of tracked devices.
+
+**Events**: one `seshat.reachability` event per change ([schema](schema/fields.md), example
+[`reachability.json`](schema/examples/reachability.json)), on its own data stream, so a route can send them to
+alerting and nothing else:
+
+| `event.action` | When | Notable fields |
+|---|---|---|
+| `device-down` | the device went down | `basis`, `seshat.reachability.error` (which checks failed), `previous_state`, `since` (when it was last up), `loss_pct` |
+| `device-up` | back up after an outage | `down_for_s`, `rtt_ms`, `uptime_s` |
+| `device-restarted` | sysUpTime went backwards | `cause: uptime_went_backwards`, `uptime_s`, `previous_uptime_s` |
+
+`device-restarted` means what the device said: its uptime went backwards, because the device **or its SNMP agent**
+restarted; sysUpTime does not tell which. A device that comes back after a restart gives `device-up` and
+`device-restarted`. sysUpTime is a 32-bit counter of hundredths of a second and wraps after 497 days; a drop from just
+below the wrap to a small value is read as the counter wrapping, not as a restart. A route that sends the events
+somewhere matches `dataset == "seshat.reachability"` (or `event.action`, `seshat.reachability.state`), for example
+`dataset == "seshat.reachability" && event.action == "device-down" && role == "core"`.
+
+**Probes off.** When the probes are switched off for a site, the state of its devices becomes `disabled` instead of keeping its last up or down on show; switching them on again starts from a new baseline.
+
+**Capacity.** The two checks of a probe run at the same time, each in a pool of its own (ICMP 256 slots, SNMP at least 64,
+more with more tracker workers), and a probe holds a slot only while its check is on the wire, so devices that do not answer
+cost slots for their timeout and do not hold the healthy ones back. A pool of n slots serves devices of an interval i
+whose checks take t at most about n·i/t at once; with 64 SNMP slots, 60 s and a 3 s timeout that is over a thousand
+silent devices. A probe that starts more than a couple of ticks after it was due is an **overrun**: it is counted
+(`seshat_tracker_reach_overruns_total`), the largest lateness of the last minutes is a gauge
+(`seshat_tracker_reach_max_lag_seconds`), and the Tracked devices page says "probes are starting late" while it lasts.
+
+**ICMP needs a socket the process may open.** Seshat tries an unprivileged ICMP datagram socket first (the kernel's
+`net.ipv4.ping_group_range`, which must include the group the process runs as) and a raw socket second (`CAP_NET_RAW`),
+for IPv4 and IPv6 separately (a host can have one family and not the other; the status shows both). If neither opens,
+ICMP is **unavailable**, and says so plainly: the reachability lines of `GET /api/tracker/status` and the Tracked devices
+page show `icmp unavailable: <reason>` **for each poller** (the server and every edge that has the problem, with the range the
+host has), the SNMP check carries on, and a device is judged by SNMP alone, as above. The default container and systemd
+settings of Seshat grant neither, and they are not changed; to turn ICMP on, choose one:
+
+| Where | Setting |
+|---|---|
+| Docker Compose | add `sysctls: {net.ipv4.ping_group_range: "65532 65532"}` to the service ([`deploy/compose/reach-icmp.example.yaml`](../deploy/compose/reach-icmp.example.yaml)), or `cap_add: [NET_RAW]` |
+| Kubernetes (Helm) | the chart value `tracker.pingGroupRange: "65532 65532"` (a pod sysctl, a safe one on current Kubernetes), or the `NET_RAW` capability |
+| systemd (`seshat`, `seshat-edge`) | the host sysctl `net.ipv4.ping_group_range = <gid> <gid>` with the gid of the unit's group (`id -g seshat`), or the drop-in that grants `CAP_NET_RAW` ([packaging](packaging.md#capabilities)) |
+
+The range names the service's own group only. A wide range such as `0 2147483647` is refused with `EINVAL` where the container
+runs in a user namespace (rootless Docker, `userns-remap`), because the range may only name gids mapped there, and it grants the
+socket to groups that have no use for it.
+
+An echo goes only where an SNMP request may: never to loopback, link-local, multicast or unspecified addresses
+(`never_poll`), and on an edge never outside the edge's own [ceiling](edge.md#the-edge-local-ceiling-for-snmp-reads) or
+allow-list. A refused target is counted under its rule and its result says which.
+
+**Where to see it.** The Tracked devices page shows each device's state, how long it has been in it, the last round-trip
+time and loss, what each check said and the device's uptime; `GET /api/tracker/devices` carries the same as
+`reachability` on each device and a `reachability` section (settings, devices per state, the ICMP problem of each
+poller, the probers' counters), and `GET /api/tracker/status` the same section. On `/metrics`:
+`seshat_tracker_reach_devices{state}`, `_events_total{action}`, `_results_total`, `_samples_total`,
+`_stale_results_total`, `_transitions_lost_total`, `_save_errors_total`, and for the server's own prober `_probes_total{check,result}`,
+`_refused_total{rule}`, `_probes_cancelled_total`, `_send_failures_total`, `_icmp_available`, `_running`,
+`_overruns_total` and `_max_lag_seconds`.
 
 ## Event-driven sightings
 
@@ -346,6 +558,75 @@ raises nothing unless "enforce approved" is set in the settings.
 Other events: `interval-opened` and `interval-closed` always; `interval-extended` only if the
 setting is on (high volume). The fields are in [`schema/fields.md`](schema/fields.md).
 
+## Infrastructure roles
+
+A device's **role** in the device record decides two things: which tracker binding (which collectors) it
+gets, and whether it counts as infrastructure (a switch, router, firewall, controller or access point the
+tracker already knows), so that a port whose neighbour is infrastructure is flagged as an uplink and
+its MACs are not reported as end devices. Both use the same matching.
+
+**Matching is by word.** The role is lower-cased, runs of white space are collapsed and the ends trimmed
+(so "Backbone  Switch" is "backbone switch" when compared whole), and it is split into words on space,
+`-`, `_`, `/`, `,`, `(`, `)`, `.` and `:`. It stands for a **role class** for each of these words:
+`switch`, `router`, `firewall`, `ap`, `core`, `distribution`, and the two-word names `wireless controller`
+(class `wireless-controller`) and `access point` (class `access-point`). "Backbone Switch" is `switch`;
+"core-router" is `core` and `router`; "Edge_Firewall" is `firewall`; "Switch (Core), Stack" is `switch` and `core`;
+"Switchboard" and "Storage Controller" are nothing (a word is matched whole).
+
+**Bindings.** A pack binding with `applies_to: { role: X }` (packs.md)
+applies to a device whose role equals `X` (as before) **or** has `X` among its classes. So the shipped
+`role: switch` bindings cover "Backbone Switch". When more than one binding matches, the choice is always
+the same for the same packs, in this order:
+
+1. the higher binding `priority`;
+2. at equal priority, the stronger class, in this fixed **class precedence**:
+   a value equal to the whole role, then `switch`, `wireless-controller`, `firewall`, `router`, `access-point`, `ap`, `core`,
+   `distribution`, then a class an include entry took from a pack (`olt`, `cmts`, ...), then a binding that names no role;
+3. the lower binding id.
+
+So an L3 "Switch/Router" gets the switch binding (and its bridge-table collectors), a "Firewall Router" the firewall
+binding, a "Core Router" the router binding. The order of the words in the role never matters.
+
+**Settings** (Tracked devices, *Settings and data*, *Infrastructure roles*; `GET/PUT /api/tracker/settings`,
+fields `infra_roles_include` and `infra_roles_exclude`, both empty by default; operators and administrators change
+them, every change is in the audit log as `tracker.settings.update` with the lists):
+
+- `infra_roles_include`: entries `{"pattern": "Spine*", "as": "switch"}`. A device whose role matches the pattern also has
+  the class `as`, so "Spine" takes the bindings of a switch and counts as infrastructure. `as` must be a class the
+  system knows: one of the classes above, or a role value that a loaded pack binding uses (`olt`, `cmts`, ...); anything
+  else is refused with `400` and the list of valid classes. Several entries may name one role: it then has all their classes.
+- `infra_roles_exclude`: roles that are never infrastructure, such as `lab`. **Exclude wins over everything, and it
+  also blocks exact equality**: an excluded role has no class and matches no binding's `role` value at all, not even a
+  binding that names exactly that role. It does **not** affect bindings that name no role (a binding with only
+  `vendor`, `os` or `model` still applies to the device).
+
+A pattern matches the whole role or any one word of it; `*` stands for any run of characters (`wlc*`, `*gateway*`).
+Blank lines and repeats are dropped; a pattern may be at most 64 characters (counted as characters, not bytes), a list
+holds at most 100 entries, a pattern that is only `*` is refused, and control characters and invisible formatting
+characters (zero-width, right-to-left overrides) are refused (400). The lists take effect at once, without a restart.
+
+> **Warning: the generic words also catch roles that are not network devices.** `core`, `distribution`, `ap` and
+> `firewall` (and `switch`, `router`) are matched anywhere in a role, so "Core Banking Server", "Distribution Warehouse"
+> or "Ap Payments Database" count as infrastructure and bind a pack. Add such roles to `infra_roles_exclude`
+> (`*banking*`, `distribution warehouse`, ...); it is the fix. Look at *Role* on the Tracked devices page and in the
+> device detail to see how a role is read.
+
+**Changing the lists can unbind devices.** A device that is enabled and loses its binding (an exclude entry, or a
+removed mapping) stops being polled. `PUT /api/tracker/settings` answers with `unbound_enabled_devices`, the number of
+enabled devices that had a binding before the change and have none after it, and the page shows a warning with the count.
+The device's poll report then says why: `role "Lab Switch" is excluded by the tracker setting infra_roles_exclude`,
+and switching such a device on is refused with the same words.
+
+The server sends both lists to every edge that polls devices, with the devices (the edge's configuration etag covers
+them), so an edge picks the same binding as the server; an older edge ignores them and keeps the default word matching.
+
+**Seeing why.** `GET /api/tracker/devices` and the Tracked devices page show, for each device, `role_match`: `word` (the role
+holds one of the words above), `setting` (only an include entry names it) or `none` (nothing matches, or the exclude list
+names it), and `role_class`, the class it matched as (the class of the binding the device got, else its strongest class).
+A device with no binding and no tracker settings is not on that page; `GET /api/devices/{id}` (and the device detail
+sheet under Devices) carries `role_match`, `role_class` and `tracker_binding` for every device, so you can see why "Spine"
+was not picked up.
+
 ## Roles and the API
 
 | Endpoint | user | viewer | operator, admin |
@@ -355,6 +636,8 @@ setting is on (high volume). The fields are in [`schema/fields.md`](schema/field
 | `POST /api/tracker/lookup/batch`, `GET /api/tracker/bindings` ([bulk reads](#bulk-reads-for-integrations)) | 403 | yes | yes |
 | every other `GET` under `/api/tracker/` (status, settings, devices, ports, port history, sources, lists, OUI) | 403 | yes | yes |
 | every `PUT`, `POST`, `PATCH` and `DELETE` under `/api/tracker/` (including poll-now and the polled-by settings) | 403 | 403 | yes |
+
+`PUT /api/tracker/settings` (including the [infrastructure role lists](#infrastructure-roles)) is in the last row: operator and admin only, audited.
 
 A `user` or `viewer` gets `403 forbidden` where the table says so, never an empty list. Every lookup, export and port history is written
 to the audit log (who, what, when). Settings can hide facts from the `user` role (user name,
@@ -386,6 +669,8 @@ SQLite, which has no schemas, the same views exist as `tracker_public_<view>`.
   operator; Seshat never polls an unknown device. Each profile only ever polls its allowed networks
   (when none are listed, any device an operator enabled for tracking; never an address known only from
   traffic) and never loopback, link-local or multicast addresses ([details](device-kb.md#where-polling-is-allowed-to-go)).
+- The [reachability probe](#reachability) is one SNMP GET of `sysUpTime.0` through the same `Session` and an ICMP echo
+  request; it sends nothing else to a device.
 - The [pollers on an edge](edge.md#polling-on-the-edge) are these same pollers: the same `Session`, the same source
   scan, and the same never-poll, allowed-networks, allow-list and ceiling checks, made on the edge before a datagram leaves.
 - The on-demand [SNMP reads through an edge](edge.md#snmp-reads) run on the same read-only `Session` and the same

@@ -84,6 +84,22 @@ printf 'SESHAT_EDGE_SERVER=https://seshat.example.com\nSESHAT_EDGE_ENROL_TOKEN=s
 docker compose -f compose.edge.yaml --env-file .env.edge up -d --build
 ```
 
+## Sharing an address with other edges (VRRP)
+
+Edges of one site in an [edge group](../../docs/edge.md#edge-groups) can share one receiving address that moves to another
+member when the holder fails ([VRRP on the edges of a group](../../docs/edge.md#vrrp-on-the-edges-of-a-group)). The server
+pushes the address and the priorities; this box only has to be allowed to hold it:
+
+```
+install -D -m 0644 /usr/share/seshat-edge/systemd/drop-ins/edge-vrrp.conf /etc/systemd/system/seshat-edge.service.d/edge-vrrp.conf
+systemctl daemon-reload && systemctl restart seshat-edge
+echo 'SESHAT_EDGE_VRRP_CEILING=192.0.2.0/24' >> /etc/seshat/edge.env     # the most the server may make this box hold; "none" forbids VRRP here
+```
+
+The drop-in adds `CAP_NET_ADMIN`, `CAP_NET_RAW`, `AF_NETLINK` and `AF_PACKET` to the unit and nothing else. Without it the edge
+still collects and delivers, and says on its status page (`Shared address`) which capability VRRP lacks. For a container,
+see [`deploy/compose/edge-vrrp.example.yaml`](../compose/edge-vrrp.example.yaml).
+
 ## Revoking, replacing, moving
 
 Revoke on the Edges page (the box keeps buffering locally, the server accepts nothing more). *Rotate credentials*

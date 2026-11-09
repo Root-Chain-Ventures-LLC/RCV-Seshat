@@ -60,7 +60,7 @@ Fields: `event.{dataset,kind,module,action,id,category,type,severity}`, `message
 `seshat.source.{listener,input,protocol,ip,port,site,vrf,edge}`,
 `seshat.device.{status,id,name,vendor,model,os,site,role,tenant,pack,tags}`,
 `seshat.enrichment.level`, `seshat.trap.{oid,name,mib,enterprise,version,pdu_type}`,
-`seshat.metric.{path,name,source,subscription}`, `seshat.metric.labels.<key>` and `known`.
+`seshat.metric.{path,name,source,subscription}`, `seshat.metric.labels.<key>`, `seshat.reachability.{check,state}` and `known`.
 Short names: `severity`, `dataset`, `input`, `listener`, `vendor`, `model`, `device`, `site`, `role`,
 `tenant`. `GET /api/outputs/meta` lists them all.
 
@@ -431,7 +431,9 @@ own address; `preserve_source` changes that, see mode 1 below. Details in "NMS f
 ### Metric destinations (`prometheus_remote_write`, `influx_line`, `otlp_metrics`)
 
 These three types consume the `seshat.metric` events of the streaming-telemetry input
-([`inputs/telemetry.md`](inputs/telemetry.md)). They read the `ecs-json` rendering, so the format
+([`inputs/telemetry.md`](inputs/telemetry.md)) and of the flow input's sFlow interface counters
+([`inputs/flows.md`](inputs/flows.md), "sFlow interface counters": `seshat.metric.source` = `sflow`, the
+same keyed paths and the single `interface` label as gNMI and SNMP polling, on by default). They read the `ecs-json` rendering, so the format
 must be `ecs-json` and `fields.include` / `fields.exclude` must be empty. An event of any other
 dataset is skipped and counted (`skipped_not_metric` in the destination's sender stats), so a
 route such as `event.dataset == "seshat.metric"` is advisable but not required. Non-numeric samples
@@ -442,6 +444,11 @@ the other destination types (Elasticsearch, file, Kafka, ...) are plain JSON doc
 Series are identified by the path without list keys plus the labels: the `seshat.metric.labels`,
 `host` (`host.name`, else the first `host.ip`), `site` (`seshat.device.site`, else the input's
 site). A path label that is itself called `host`, `site` or `source` is renamed `label_<name>`.
+
+Interface metrics have one form whatever input made them (gNMI, sFlow counter samples, SNMP polling): the keyed path
+`/interfaces/interface[name=<if>]/state/...`, the single label `interface` (ifName, else ifDescr, else the ifIndex) and
+`seshat.metric.kind` for counters, gauges and states. The same counter of the same device from two inputs is therefore
+one series (`host` is the device name from the knowledge base when it is known); `seshat.metric.source` tells them apart.
 
 | Type | Wire format | Settings |
 |---|---|---|

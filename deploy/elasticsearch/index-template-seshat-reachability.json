@@ -1,0 +1,92 @@
+{
+  "index_patterns": [
+    "logs-seshat.reachability-*"
+  ],
+  "data_stream": {},
+  "priority": 200,
+  "version": 1,
+  "composed_of": [
+    "seshat-core"
+  ],
+  "_meta": {
+    "managed_by": "seshat",
+    "seshat_schema_version": "1.0",
+    "ecs_version": "8.11.0",
+    "description": "Seshat seshat.reachability data streams: device reachability state changes (down, up, restarted) from the Device Tracker's ICMP and SNMP probes."
+  },
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": 1,
+        "number_of_replicas": 1
+      }
+    },
+    "mappings": {
+      "properties": {
+        "seshat": {
+          "dynamic": false,
+          "properties": {
+            "reachability": {
+              "properties": {
+                "check": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "state": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "previous_state": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "since": {
+                  "type": "date"
+                },
+                "down_for_s": {
+                  "type": "long"
+                },
+                "rtt_ms": {
+                  "type": "double"
+                },
+                "loss_pct": {
+                  "type": "double"
+                },
+                "uptime_s": {
+                  "type": "long"
+                },
+                "previous_uptime_s": {
+                  "type": "long"
+                },
+                "error": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "basis": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "cause": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "probed_by": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        },
+        "data_stream": {
+          "properties": {
+            "dataset": {
+              "type": "constant_keyword",
+              "value": "seshat.reachability"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -64,6 +64,30 @@ console:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {memory: 1Gi}
 
+# Peer protocol between the replicas (docs/kubernetes.md, Several replicas and edges). An edge holds its control
+# connection to one pod. With peers, whichever pod takes a request finds that pod, so the edge relay, poll-now and
+# SNMP reads work from every replica. Without them they answer edge_offline on every other replica.
+cluster:
+  enabled: false
+  # Base URLs of the nodes. Empty: every replica of the StatefulSet, from replicaCount, by its headless DNS name
+  # (http://<pod>.<release>-headless.<namespace>.svc:<ui.containerPort>). A replica skips its own URL.
+  peers: []
+  secret:
+    # Secret holding the shared cluster secret (at least 16 characters). REQUIRED with cluster.enabled.
+    #   kubectl create secret generic seshat-cluster --from-literal=SESHAT_CLUSTER_SECRET="$(openssl rand -hex 32)"
+    existingSecret: ""
+    key: SESHAT_CLUSTER_SECRET
+  # The peer protocol is signed, not encrypted, and the generated URLs are plain http. Seshat refuses to forward
+  # relay sessions over plain http unless this is on, so the edge relay needs it with generated URLs. Relay bytes
+  # stay inside the client's own TLS or SSH; a target that speaks a plain protocol crosses the pod network in the
+  # clear, as does the replicated configuration (its secrets stay sealed). Off needs https:// URLs in cluster.peers.
+  allowPlainRelay: true
+  networkPolicy:
+    # Allow the replicas to reach each other on ui.containerPort, for namespaces that already run a default-deny
+    # policy. Leave it off otherwise: a NetworkPolicy isolates the pods it selects, so without your other policies
+    # this one alone would cut off telemetry, the UI, the database and the destinations.
+    enabled: false
+
 logLevel: info
 
 leaderElection:
@@ -196,6 +220,13 @@ nms:
 # Changing replicaCount rolls the pods, which re-shards. Needs the Device Tracker.
 tracker:
   shardByOrdinal: false
+  # Reachability probes (on by default, docs/device-tracker.md#reachability) send ICMP echoes. The
+  # pods run without capabilities, so ICMP is unavailable unless the pod's network namespace lets the pod's group
+  # open unprivileged ICMP sockets. Set this to the pod's own group only, "65532 65532" (the chart runs as uid/gid 65532; a wide range such as
+  # "0 2147483647" is refused with EINVAL under a user namespace); it becomes the pod
+  # sysctl net.ipv4.ping_group_range (a safe sysctl on current Kubernetes). Empty: not set, ICMP stays unavailable
+  # and the probes use the SNMP check only. The pods' security context is otherwise unchanged.
+  pingGroupRange: ""
 
 # The Device Tracker portal (second app, separate image).
 portal:

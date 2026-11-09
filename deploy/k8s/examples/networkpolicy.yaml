@@ -41,6 +41,15 @@ spec:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}
       ports:
         - {protocol: TCP, port: 8080}
+    # The other replicas: the peer protocol that finds the pod holding an edge's control connection (chart: cluster.enabled,
+    # which renders this rule and the egress one with cluster.networkPolicy.enabled). Drop both when peers are off.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: seshat
+              app.kubernetes.io/component: collector
+      ports:
+        - {protocol: TCP, port: 8080}
     # The kubelet's probes come from the node; most CNIs always allow them. If yours does not, add the node CIDR here.
   egress:
     # DNS.
@@ -49,6 +58,14 @@ spec:
       ports:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
+    # The other replicas (see the ingress rule).
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: seshat
+              app.kubernetes.io/component: collector
+      ports:
+        - {protocol: TCP, port: 8080}
     # PostgreSQL.
     - to:
         - podSelector: {matchLabels: {cnpg.io/cluster: seshat-db}}

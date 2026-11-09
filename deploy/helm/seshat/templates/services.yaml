@@ -11,7 +11,8 @@ metadata:
     metrics: "true"
 spec:
   clusterIP: None
-  publishNotReadyAddresses: false
+  {{- /* A peer that is not ready can still hold an edge's control connection, so keep its DNS name. */}}
+  publishNotReadyAddresses: {{ .Values.cluster.enabled }}
   selector:
     {{- include "seshat.selector" (list . "collector") | nindent 4 }}
   ports:

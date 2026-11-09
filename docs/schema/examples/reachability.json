@@ -1,0 +1,42 @@
+{
+  "@timestamp": "2026-10-12T14:05:30.120Z",
+  "ecs": { "version": "8.11.0" },
+  "data_stream": { "type": "logs", "dataset": "seshat.reachability", "namespace": "exo" },
+  "event": {
+    "kind": "event",
+    "category": ["network"],
+    "type": ["change"],
+    "action": "device-down",
+    "dataset": "seshat.reachability",
+    "module": "seshat",
+    "id": "01K7XEXAMPLE0REACH000001",
+    "created": "2026-10-12T14:05:30.120Z",
+    "severity": 4
+  },
+  "observer": {
+    "vendor": "Example Org",
+    "product": "Seshat",
+    "version": "0.1.0",
+    "name": "collector-1.example.com",
+    "type": "gateway"
+  },
+  "message": "switch3.example.com is down (no icmp reply, no snmp reply)",
+  "host": { "name": "switch3.example.com", "ip": ["192.0.2.11"] },
+  "related": { "ip": ["192.0.2.11"], "hosts": ["switch3.example.com"] },
+  "seshat": {
+    "schema_version": "1.0",
+    "source": { "listener": "reachability", "input": "poller", "site": "example-site-a" },
+    "device": { "status": "known", "id": "dev-0003", "name": "switch3.example.com", "site": "example-site-a", "role": "access-switch" },
+    "enrichment": { "level": "none" },
+    "reachability": {
+      "check": "device",
+      "state": "down",
+      "previous_state": "up",
+      "since": "2026-10-12T09:41:05Z",
+      "loss_pct": 100,
+      "error": "no icmp reply, no snmp reply",
+      "probed_by": "server",
+      "basis": "icmp+snmp"
+    }
+  }
+}

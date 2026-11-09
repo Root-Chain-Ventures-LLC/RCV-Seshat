@@ -12,7 +12,7 @@
     "managed_by": "seshat",
     "seshat_schema_version": "1.0",
     "ecs_version": "8.11.0",
-    "description": "Seshat seshat.metric data streams: streaming telemetry samples (gNMI, Cisco MDT, Juniper JTI): one document per leaf value."
+    "description": "Seshat seshat.metric data streams: streaming telemetry samples (gNMI, Cisco MDT, Juniper JTI, Dell OS10) and SNMP-polled metrics: one document per value."
   },
   "template": {
     "settings": {
@@ -55,6 +55,10 @@
                   "ignore_above": 1024
                 },
                 "subscription": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "kind": {
                   "type": "keyword",
                   "ignore_above": 1024
                 }

@@ -11,7 +11,7 @@ The pages below are the operator's view of each part. Start with the deployment 
 | Secrets and keys | [`secrets.md`](secrets.md) | How credentials are sealed, what must never hold one, clearing secrets, `seshat secrets rekey`, file permissions, transport security |
 | Storage and clustering | [`storage.md`](storage.md) | SQLite vs PostgreSQL, change fan-out, leader election and singleton jobs, offline behaviour, the copy tool, retention, database roles and TLS |
 | High availability | [`ha.md`](ha.md) | The four HA modes; mode 4: the load-balancer contract (`/api/health`, `/api/ready`, `/api/drain`), source-IP preservation, MetalLB, IPVS-DSR, cloud NLBs |
-| Edge collectors | [`edge.md`](edge.md) | `--role edge`: enrolment, the outbound stream, site scoping, the edge CA, health, footprint; install guide in [`../deploy/edge/`](../deploy/edge/README.md) |
+| Edge collectors | [`edge.md`](edge.md) | `--role edge`: enrolment, the outbound stream, site scoping, the edge CA, health, polling and relay on the edge, [Edge HA](edge.md#edge-ha) (edge groups, a shared receiving address, a worked example, trade-offs), footprint; install guide in [`../deploy/edge/`](../deploy/edge/README.md) |
 | SNMP trap input | [`inputs/snmp.md`](inputs/snmp.md) | v1/v2c/v3 traps and informs, allow-list, rate limits, v3 users and engine IDs |
 | Syslog input | [`inputs/syslog.md`](inputs/syslog.md) | UDP/TCP/TLS listeners, RFC 3164/5424, CEF/LEEF, grammars, the template inbox |
 | Flow input | [`inputs/flows.md`](inputs/flows.md) | NetFlow v5/v9, IPFIX, sFlow, J-Flow/NetStream/NSEL, templates, sampling, GeoIP (bring your own), roll-ups |

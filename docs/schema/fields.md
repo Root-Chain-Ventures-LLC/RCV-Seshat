@@ -54,7 +54,8 @@ Conventions that apply to every field:
 | `seshat.flow_rollup` | `metric` | one roll-up row for a one-minute window |
 | `seshat.tracker` | `event` | one Device Tracker sighting or interval open/extend/close |
 | `seshat.device` | `state` | one revision of a device knowledge-base record |
-| `seshat.metric` | `metric` | one streaming-telemetry sample (gNMI, Cisco MDT, Juniper JTI, Dell OS10): one leaf value |
+| `seshat.metric` | `metric` | one streaming-telemetry sample (gNMI, Cisco MDT, Juniper JTI, Dell OS10, or sFlow interface counters) or one SNMP-polled metric: one value |
+| `seshat.reachability` | `event` | one device reachability state change (down, up, restarted) from the Device Tracker's ICMP and SNMP probes |
 
 ## Field tables
 
@@ -78,15 +79,15 @@ Conventions that apply to every field:
 | `event.kind` | keyword | ECS | Y | all | `event` for traps, syslog, flows and tracker sightings; `metric` for roll-ups and streaming-telemetry samples; `state` for device records. | `event` |
 | `event.category` | keyword[] | ECS | C | all | ECS event category list (`network`, `authentication`, `host`, `configuration`, ...). Pack mappings set it; the default is `network`. | `["network"]` |
 | `event.type` | keyword[] | ECS | O | all | ECS event type list (`info`, `connection`, `start`, `end`, `change`, `denied`, ...). | `["info"]` |
-| `event.action` | keyword | ECS | O | all | What happened. Traps: the action a pack maps the notification to (IF-MIB `linkDown` and `linkUp` become `interface-down` and `interface-up`, like the vendor syslog mappings), else the notification name; the name itself stays in `seshat.trap.name`. Tracker: `sighting`, `interval-opened`, `interval-extended`, `interval-closed`, `watch.hit`, `unknown.appeared`. Flows: `flow` (NSEL firewall events: `flow-created`, `flow-denied`, `flow-deleted`). | `interface-down` |
-| `event.dataset` | keyword | ECS | Y | all | One of `seshat.trap`, `seshat.syslog`, `seshat.flow`, `seshat.flow_rollup`, `seshat.tracker`, `seshat.device`, `seshat.metric`, `seshat.passthrough`. The routing key for data streams. | `seshat.trap` |
+| `event.action` | keyword | ECS | O | all | What happened. Traps: the action a pack maps the notification to (IF-MIB `linkDown` and `linkUp` become `interface-down` and `interface-up`, like the vendor syslog mappings), else the notification name; the name itself stays in `seshat.trap.name`. Tracker: `sighting`, `interval-opened`, `interval-extended`, `interval-closed`, `watch.hit`, `unknown.appeared`. Flows: `flow` (NSEL firewall events: `flow-created`, `flow-denied`, `flow-deleted`). Reachability: `device-down`, `device-up`, `device-restarted`. | `interface-down` |
+| `event.dataset` | keyword | ECS | Y | all | One of `seshat.trap`, `seshat.syslog`, `seshat.flow`, `seshat.flow_rollup`, `seshat.tracker`, `seshat.device`, `seshat.metric`, `seshat.reachability`, `seshat.passthrough`. The routing key for data streams. | `seshat.trap` |
 | `event.module` | keyword | ECS | Y | all | Always `seshat`. | `seshat` |
 | `event.id` | keyword | ECS | Y | all | Unique event id (ULID, generated at receive time). Stable across retries and destinations, so it is safe as a document id for de-duplication. | `01K7XEXAMPLE0TRAP00000001` |
 | `event.created` | date | ECS | Y | all | When Seshat received (or, for roll-ups and device records, produced) the event. | `2026-10-12T14:03:07.440Z` |
 | `event.ingested` | date | ECS | O | all | Set by the destination's ingest pipeline, never by Seshat. Mapped so pipelines can set it. | `2026-10-12T14:03:08.100Z` |
 | `event.original` | keyword | ECS | C | syslog, flow, trap, passthrough | The raw message as received (syslog line). Not indexed and without doc values; present only in `_source`. Optional for traps and flows. In `seshat.passthrough` it is the point of the record: the original message exactly as the listener read it (text), or its base64 when `seshat.passthrough.encoding` is `base64`; searchable there (text). | `<165>1 2026-10-12T14:03:07.412Z switch3.example.com sshd 2411 ID47 ...` |
 | `event.timezone` | keyword | ECS | O | syslog | The zone Seshat applied to a device timestamp that carried none (RFC 3164, or ISO 8601 without an offset): an IANA name such as `America/Los_Angeles`, or a fixed offset. Absent when the timestamp carried its own offset (RFC 5424) or there was none. See the syslog input doc for how the zone is chosen. | `America/Los_Angeles` |
-| `event.severity` | long | ECS | C | trap, syslog, tracker | Severity on the syslog scale 0 (emergency) to 7 (debug). Syslog: the PRI severity. Traps: set by the pack mapping, default 5 (notice). | `3` |
+| `event.severity` | long | ECS | C | trap, syslog, tracker, reachability | Severity on the syslog scale 0 (emergency) to 7 (debug). Syslog: the PRI severity. Traps: set by the pack mapping, default 5 (notice). | `3` |
 | `event.code` | keyword | ECS | O | trap, syslog, flow | Vendor message code or mnemonic when a pack extracts one. | `LINK-UPDOWN` |
 | `event.outcome` | keyword | ECS | O | syslog, flow | `success`, `failure` or `unknown`, when the pack can tell. | `failure` |
 | `event.start` | date | ECS | Y | flow, flow_rollup | Flow start time (flow) or start of the roll-up window. | `2026-10-12T14:02:41.000Z` |
@@ -108,11 +109,11 @@ Conventions that apply to every field:
 
 | Field | Type | Origin | Req | Datasets | Description | Example |
 |---|---|---|---|---|---|---|
-| `host.name` | keyword | ECS | C | trap, syslog, flow, device, metric | The sending device as observed: sysName, syslog header hostname or the KB name. Device records: the KB name. | `switch3.example.com` |
-| `host.ip` | ip[] | ECS | C | trap, syslog, flow, device, metric | The sending device's address(es). Events: the source address of the datagram (and the agent address when different). Device records: every known address. | `["192.0.2.11"]` |
+| `host.name` | keyword | ECS | C | trap, syslog, flow, device, metric, reachability | The sending device as observed: sysName, syslog header hostname or the KB name. Device records: the KB name. | `switch3.example.com` |
+| `host.ip` | ip[] | ECS | C | trap, syslog, flow, device, metric, reachability | The sending device's address(es). Events: the source address of the datagram (and the agent address when different). Device records: every known address. | `["192.0.2.11"]` |
 | `host.mac` | keyword[] | ECS | O | trap, syslog, flow, device | Device MAC addresses when known. Always lowercase, colon-separated (`02:00:5e:10:00:03`); this deliberately differs from the hyphenated RFC 7042 notation ECS suggests, so values match what the Device Tracker normalises. | `["02:00:5e:10:00:03"]` |
-| `related.ip` | ip[] | ECS | O | trap, syslog, flow, tracker, metric | Every IP address mentioned in the event (host, source, destination, varbind addresses, tracked endpoint). | `["192.0.2.11"]` |
-| `related.hosts` | keyword[] | ECS | O | trap, syslog, flow, tracker | Every hostname mentioned in the event. | `["switch3.example.com"]` |
+| `related.ip` | ip[] | ECS | O | trap, syslog, flow, tracker, metric, reachability | Every IP address mentioned in the event (host, source, destination, varbind addresses, tracked endpoint). | `["192.0.2.11"]` |
+| `related.hosts` | keyword[] | ECS | O | trap, syslog, flow, tracker, reachability | Every hostname mentioned in the event. | `["switch3.example.com"]` |
 | `related.user` | keyword[] | ECS | O | syslog, tracker | Every user name mentioned in the event. | `["admin"]` |
 
 ### `error.*`
@@ -192,39 +193,39 @@ Conventions that apply to every field:
 
 | Field | Type | Origin | Req | Datasets | Description | Example |
 |---|---|---|---|---|---|---|
-| `seshat.source.listener` | keyword | seshat | C | trap, syslog, flow, tracker, passthrough | Name of the listener (or poller, for tracker documents) that received the data. | `syslog-udp-default` |
-| `seshat.source.input` | keyword | seshat | C | trap, syslog, flow, tracker, metric, passthrough | Input family: `snmp`, `syslog`, `flow`, `telemetry`, `poller`, `edge`. | `syslog` |
+| `seshat.source.listener` | keyword | seshat | C | trap, syslog, flow, tracker, reachability, passthrough | Name of the listener (or poller, for tracker documents) that received the data. | `syslog-udp-default` |
+| `seshat.source.input` | keyword | seshat | C | trap, syslog, flow, tracker, metric, reachability, passthrough | Input family: `snmp`, `syslog`, `flow`, `telemetry`, `poller`, `edge`. | `syslog` |
 | `seshat.source.protocol` | keyword | seshat | O | trap, syslog, flow, metric, passthrough | Transport the datagram or stream arrived on: `udp`, `tcp`, `tls`, `grpc`. | `udp` |
 | `seshat.source.ip` | ip | seshat | O | trap, syslog, flow, metric, passthrough | Sender address as received by the listener (after edge forwarding: the original sender, not the edge). | `192.0.2.11` |
 | `seshat.source.port` | long | seshat | O | trap, syslog, flow, metric, passthrough | Sender port. | `51514` |
-| `seshat.source.site` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, passthrough | Site scope from the listener or the edge. Part of the device identity key, so overlapping address space at different sites never collides. | `example-site-a` |
-| `seshat.source.vrf` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, passthrough | VRF scope from the listener. | `default` |
-| `seshat.source.edge` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, passthrough | Identity of the Seshat Edge that forwarded the message. Absent for directly received data. | `edge-a1` |
+| `seshat.source.site` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, passthrough | Site scope from the listener or the edge. Part of the device identity key, so overlapping address space at different sites never collides. | `example-site-a` |
+| `seshat.source.vrf` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, passthrough | VRF scope from the listener. | `default` |
+| `seshat.source.edge` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, passthrough | Identity of the Seshat Edge that forwarded the message. Absent for directly received data. | `edge-a1` |
 | `seshat.source.passthrough_id` | keyword | seshat | O | trap, syslog, flow | Only on inputs where passthrough is on: the `event.id` of the `seshat.passthrough` record taken from the same message. It is the join key between the two streams. One datagram can produce several flow events; they all carry the same value. Absent when passthrough is off. | `01K7XEXAMPLE0PASS0000001` |
 
 ### `seshat.device.*`
 
 | Field | Type | Origin | Req | Datasets | Description | Example |
 |---|---|---|---|---|---|---|
-| `seshat.device.status` | keyword | seshat | Y | trap, syslog, flow, flow_rollup, tracker, metric, device | `known`, `unknown` or `stale`. Unknown senders still produce full events. | `known` |
-| `seshat.device.id` | keyword | seshat | C | trap, syslog, flow, flow_rollup, tracker, metric, device | Stable device id from the device KB. | `dev-0003` |
-| `seshat.device.name` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, device | Device name (inventory name, else sysName). | `switch3.example.com` |
-| `seshat.device.vendor` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, device | Vendor from inventory or pack classification. | `Example Vendor` |
-| `seshat.device.model` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, device | Hardware model. | `EX-3000-48P` |
-| `seshat.device.os` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, device | Operating system family. | `ExampleOS` |
-| `seshat.device.os_version` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, device | Operating system version. | `4.2.1` |
-| `seshat.device.serial` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, device | Chassis serial number. | `EXSN0000003` |
-| `seshat.device.site` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, device | Site from inventory. | `example-site-a` |
-| `seshat.device.role` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, device | Role from inventory (`access-switch`, `core-router`, `firewall`, ...). | `access-switch` |
-| `seshat.device.tenant` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, device | Tenant from inventory. | `example-tenant` |
-| `seshat.device.tags` | keyword[] | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, device | Inventory tags. | `["idf", "poe"]` |
-| `seshat.device.pack` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, device | Vendor pack (id@version) that classified the device. | `example-vendor@1.0.0` |
-| `seshat.device.custom` | flattened | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, device | Inventory custom fields, stored flattened so any inventory schema fits. | `{"rack": "R3"}` |
-| `seshat.device.first_seen` | date | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, device | When the KB first saw the device. | `2026-09-01T08:00:00.000Z` |
-| `seshat.device.last_seen` | date | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, device | When the KB last heard from the device. | `2026-10-12T14:03:07.412Z` |
-| `seshat.device.interface.name` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric | Interface name resolved from the KB (ifIndex to ifName). Traps: the interface the notification is about. Tracker: the port the endpoint was seen on. | `GigabitEthernet1/0/14` |
-| `seshat.device.interface.index` | long | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric | ifIndex as sent by the device. | `10114` |
-| `seshat.device.interface.alias` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric | ifAlias (operator description) from the KB. | `Room 214 jack J-214` |
+| `seshat.device.status` | keyword | seshat | Y | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | `known`, `unknown` or `stale`. Unknown senders still produce full events. | `known` |
+| `seshat.device.id` | keyword | seshat | C | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | Stable device id from the device KB. | `dev-0003` |
+| `seshat.device.name` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | Device name (inventory name, else sysName). | `switch3.example.com` |
+| `seshat.device.vendor` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | Vendor from inventory or pack classification. | `Example Vendor` |
+| `seshat.device.model` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | Hardware model. | `EX-3000-48P` |
+| `seshat.device.os` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | Operating system family. | `ExampleOS` |
+| `seshat.device.os_version` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | Operating system version. | `4.2.1` |
+| `seshat.device.serial` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | Chassis serial number. | `EXSN0000003` |
+| `seshat.device.site` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | Site from inventory. | `example-site-a` |
+| `seshat.device.role` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | Role from inventory (`access-switch`, `core-router`, `firewall`, ...). | `access-switch` |
+| `seshat.device.tenant` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | Tenant from inventory. | `example-tenant` |
+| `seshat.device.tags` | keyword[] | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | Inventory tags. | `["idf", "poe"]` |
+| `seshat.device.pack` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | Vendor pack (id@version) that classified the device. | `example-vendor@1.0.0` |
+| `seshat.device.custom` | flattened | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | Inventory custom fields, stored flattened so any inventory schema fits. | `{"rack": "R3"}` |
+| `seshat.device.first_seen` | date | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | When the KB first saw the device. | `2026-09-01T08:00:00.000Z` |
+| `seshat.device.last_seen` | date | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, device | When the KB last heard from the device. | `2026-10-12T14:03:07.412Z` |
+| `seshat.device.interface.name` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability | Interface name resolved from the KB (ifIndex to ifName). Traps: the interface the notification is about. Tracker: the port the endpoint was seen on. | `GigabitEthernet1/0/14` |
+| `seshat.device.interface.index` | long | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability | ifIndex as sent by the device. | `10114` |
+| `seshat.device.interface.alias` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability | ifAlias (operator description) from the KB. | `Room 214 jack J-214` |
 | `seshat.device.sys_name` | keyword | seshat | O | device | SNMPv2-MIB sysName. | `switch3` |
 | `seshat.device.sys_object_id` | keyword | seshat | O | device | SNMPv2-MIB sysObjectID. | `1.3.6.1.4.1.32473.1.3` |
 | `seshat.device.engine_id` | keyword | seshat | O | device | SNMP engine ID (hex) registered for SNMPv3 traps. | `80007ed90402000000000003` |
@@ -253,14 +254,14 @@ Conventions that apply to every field:
 
 | Field | Type | Origin | Req | Datasets | Description | Example |
 |---|---|---|---|---|---|---|
-| `seshat.enrichment.level` | keyword | seshat | Y | trap, syslog, flow, flow_rollup, tracker, metric | `none`, `partial` or `full`. | `full` |
-| `seshat.enrichment.sources` | keyword[] | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric | Which KB sources contributed (`inventory`, `dns`, `snmp`, `pack`). | `["inventory", "pack"]` |
-| `seshat.enrichment.kb_observed_at` | date | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric | Age of the KB record used: when its newest contributing fact was observed. | `2026-10-12T13:55:00.000Z` |
-| `seshat.enrichment.backfilled` | boolean | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric | True on documents re-emitted by the backfill script after a device became known. | `false` |
-| `seshat.enrichment.fields` | flattened | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric | Enrichment provenance: each field the pipeline set after the message was received (pack-parsed fields, MIB names, knowledge-base device fields, OUI vendor) mapped to the id of the origin that set it (`origins[].id`). Absent when no destination keeps it (`format_options.provenance: off`). | `{"seshat.device.model": "kb:inventory:netbox", "seshat.syslog.appname": "pack:example"}` |
-| `seshat.enrichment.origins` | flattened[] | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric | The origins named by `fields`, one object each: `id` (the key `fields` uses: `kb:<source>[:<connector>]`, `pack:<name>`, `mib:<module>`, `oui:<registry>`; a second observation of the same knowledge-base source gets a `~1` suffix), `kind` (`kb`, `pack`, `mib`, `oui`), `name` (connector, pack, MIB module or registry), `source` (kind `kb`: `manual`, `inventory`, `snmp`, `pack`, `learned`, `dns`), `version` (pack version, registry release), `observed_at` (when the source last supplied the attributed fields; for `oui`, when the registry was loaded) and `confidence` (kind `kb`: 0.0 to 1.0). Stored flattened: query `seshat.enrichment.origins.name`, `.kind`, `.source` as keywords; the objects of one document are not matched as a unit. | `[{"id": "kb:inventory:netbox", "kind": "kb", "name": "netbox", "source": "inventory"}]` |
-| `seshat.route.matched` | keyword[] | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, passthrough | Ids of the routes that matched. Debug aid; present only where a destination's field filter keeps it. | `["route-all-traps"]` |
-| `seshat.route.destinations` | keyword[] | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, passthrough | Ids of the destinations the event was copied to. | `["dest-logstash"]` |
+| `seshat.enrichment.level` | keyword | seshat | Y | trap, syslog, flow, flow_rollup, tracker, metric, reachability | `none`, `partial` or `full`. | `full` |
+| `seshat.enrichment.sources` | keyword[] | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability | Which KB sources contributed (`inventory`, `dns`, `snmp`, `pack`). | `["inventory", "pack"]` |
+| `seshat.enrichment.kb_observed_at` | date | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability | Age of the KB record used: when its newest contributing fact was observed. | `2026-10-12T13:55:00.000Z` |
+| `seshat.enrichment.backfilled` | boolean | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability | True on documents re-emitted by the backfill script after a device became known. | `false` |
+| `seshat.enrichment.fields` | flattened | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability | Enrichment provenance: each field the pipeline set after the message was received (pack-parsed fields, MIB names, knowledge-base device fields, OUI vendor) mapped to the id of the origin that set it (`origins[].id`). Absent when no destination keeps it (`format_options.provenance: off`). | `{"seshat.device.model": "kb:inventory:netbox", "seshat.syslog.appname": "pack:example"}` |
+| `seshat.enrichment.origins` | flattened[] | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability | The origins named by `fields`, one object each: `id` (the key `fields` uses: `kb:<source>[:<connector>]`, `pack:<name>`, `mib:<module>`, `oui:<registry>`; a second observation of the same knowledge-base source gets a `~1` suffix), `kind` (`kb`, `pack`, `mib`, `oui`), `name` (connector, pack, MIB module or registry), `source` (kind `kb`: `manual`, `inventory`, `snmp`, `pack`, `learned`, `dns`), `version` (pack version, registry release), `observed_at` (when the source last supplied the attributed fields; for `oui`, when the registry was loaded) and `confidence` (kind `kb`: 0.0 to 1.0). Stored flattened: query `seshat.enrichment.origins.name`, `.kind`, `.source` as keywords; the objects of one document are not matched as a unit. | `[{"id": "kb:inventory:netbox", "kind": "kb", "name": "netbox", "source": "inventory"}]` |
+| `seshat.route.matched` | keyword[] | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, passthrough | Ids of the routes that matched. Debug aid; present only where a destination's field filter keeps it. | `["route-all-traps"]` |
+| `seshat.route.destinations` | keyword[] | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, passthrough | Ids of the destinations the event was copied to. | `["dest-logstash"]` |
 
 ### `seshat.trap.*`
 
@@ -375,8 +376,9 @@ Conventions that apply to every field:
 | `seshat.metric.value_type` | keyword | seshat | Y | metric | `int64`, `uint64`, `double`, `string`, `bool` or `delete` (the path was deleted on the device). | `uint64` |
 | `seshat.metric.value_string` | keyword | seshat | O | metric | String form of non-numeric values (`string`, `bool`), so they stay searchable. | `UP` |
 | `seshat.metric.labels` | flattened | seshat | O | metric | List keys of the path flattened to label names (`interface`, `neighbor`, ...). A single-key list element contributes its element name; multi-key elements contribute `<element>_<key>`. | `{"interface": "Ethernet1/1"}` |
-| `seshat.metric.source` | keyword | seshat | Y | metric | Which telemetry adapter produced the sample: `gnmi`, `mdt` (Cisco model-driven telemetry), `jti` (Juniper) or `os10` (Dell OS10 dial-out). | `gnmi` |
+| `seshat.metric.source` | keyword | seshat | Y | metric | Which telemetry adapter produced the sample: `gnmi`, `mdt` (Cisco model-driven telemetry), `jti` (Juniper), `os10` (Dell OS10 dial-out), `snmp` (a metric collector of the Device Tracker poller), `sflow` (interface counters from sFlow counter samples, flow input) or `reach` (the reachability probe of the Device Tracker). | `gnmi` |
 | `seshat.metric.subscription` | keyword | seshat | O | metric | Subscription (MDT) or sensor/subscription name as the device reports it, when it does. | `sub-interfaces` |
+| `seshat.metric.kind` | keyword | seshat | O | metric | How to read the value: `counter` (a raw, monotonically increasing count; take the rate downstream), `gauge` or `state` (an enumeration; the value is the MIB's enum number). Set by the SNMP metric collectors; streaming telemetry leaves it empty. | `counter` |
 
 ### `seshat.tracker.*`
 
@@ -418,6 +420,24 @@ Conventions that apply to every field:
 | `seshat.tracker.location.remote_id` | keyword | seshat | O | tracker | Remote id of the circuit (DHCP option 82 remote-id, PPPoE agent remote id). | `line-1042` |
 | `seshat.tracker.location.circuit_kind` | keyword | seshat | O | tracker | Access technology of the circuit: `cable-modem`, `ont`, `pppoe`, `dhcp-option82`. | `cable-modem` |
 | `seshat.tracker.location.trace` | keyword[] | seshat | O | tracker | Inventory trace labels, port outwards: port description, patch panel, jack, room. | `["Panel P2/14", "Jack J-214", "Room 214"]` |
+
+### `seshat.reachability.*`
+
+| Field | Type | Origin | Req | Datasets | Description | Example |
+|---|---|---|---|---|---|---|
+| `seshat.reachability.check` | keyword | seshat | Y | reachability | What changed state: `icmp` (echo), `snmp` (a sysUpTime read) or `device` (the combined state of the two). | `device` |
+| `seshat.reachability.state` | keyword | seshat | Y | reachability | The state the device is in now: `up` or `down`. A reboot is reported with state `up`. | `down` |
+| `seshat.reachability.previous_state` | keyword | seshat | O | reachability | The state before the change: `up`, `down` or `unknown` (the first probe after Seshat started). | `up` |
+| `seshat.reachability.since` | date | seshat | O | reachability | When the previous state began (the first probe that saw it). | `2026-10-12T13:58:35Z` |
+| `seshat.reachability.down_for_s` | long | seshat | O | reachability | On an up event after an outage: how long the device was down, in seconds. | `95` |
+| `seshat.reachability.rtt_ms` | double | seshat | O | reachability | Average ICMP round-trip time of the probe that saw the change, in milliseconds. | `0.84` |
+| `seshat.reachability.loss_pct` | double | seshat | O | reachability | ICMP loss of the probe that saw the change, in percent. | `0` |
+| `seshat.reachability.uptime_s` | long | seshat | O | reachability | sysUpTime of the device in seconds (SNMP), when it answered. | `3600` |
+| `seshat.reachability.previous_uptime_s` | long | seshat | O | reachability | On a reboot event: the sysUpTime seen by the probe before, in seconds. | `864000` |
+| `seshat.reachability.error` | keyword | seshat | O | reachability | Why the probe failed, in a few words (`timeout`, `no icmp reply`, `snmp: authentication failure`). | `no icmp reply` |
+| `seshat.reachability.basis` | keyword | seshat | O | reachability | On `device-down`: the checks the verdict rests on, `icmp+snmp`, `icmp` or `snmp-only`. An `snmp-only` verdict (ICMP unavailable or off) is weaker: a wrong SNMPv2c community is silence too. | `icmp+snmp` |
+| `seshat.reachability.cause` | keyword | seshat | O | reachability | On `device-restarted`: `uptime_went_backwards`. sysUpTime went backwards: the device or its SNMP agent restarted (the value does not tell which). | `uptime_went_backwards` |
+| `seshat.reachability.probed_by` | keyword | seshat | O | reachability | Who ran the probe: `server`, or `edge:<id>`. | `server` |
 
 ### `seshat.passthrough.*`
 

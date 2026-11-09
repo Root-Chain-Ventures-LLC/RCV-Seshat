@@ -1,0 +1,62 @@
+# An edge collector that is a member of an edge group and shares its receiving address with the other members
+# (VRRP; docs/edge.md, "VRRP on the edges of a group"). Copy this file to each member host, enrol the edge as in
+# compose.edge.yaml (SESHAT_EDGE_SERVER and SESHAT_EDGE_ENROL_TOKEN in .env.edge next to this file), add the edge to
+# the group on the server and set the group's VRRP configuration (PUT /api/edge-groups/{id}/vrrp). Nothing about the
+# address is configured here: the server pushes it, and this file only lets the edge hold it.
+#
+#   docker compose -f deploy/compose/edge-vrrp.example.yaml up -d
+#
+# What differs from compose.edge.yaml, and why
+# - network_mode: host   the shared address is programmed onto the host's own interface and the advertisements
+#                        (IP protocol 112, multicast 224.0.0.18) go out on it, so the container shares the host's
+#                        network namespace. Published ports do not apply: the edge listens on the host's ports itself.
+# - user: "0:0" + caps   VRRP needs CAP_NET_ADMIN (add and remove the address) and CAP_NET_RAW (protocol 112, gratuitous
+#                        ARP). The image's default user is non-root and holds no capabilities, so this is the one
+#                        edge setup that runs as root. Everything else is dropped: cap_drop ALL, then NET_ADMIN, NET_RAW,
+#                        NET_BIND_SERVICE (162 and 514 directly) and DAC_OVERRIDE (root cannot open the image's /data,
+#                        0700 owned by uid 65532, without it; see deploy/compose/ha-pair.example.yaml for the way
+#                        to drop that one too). read_only, tmpfs /tmp and no-new-privileges apply as before.
+#                        Without the two capabilities the edge still starts, receives and delivers, and its status page,
+#                        its log and the server's view of the group say exactly which capability VRRP lacks.
+# - SESHAT_EDGE_VRRP_CEILING  the edge's own bound on the addresses the server may make it hold (CIDRs, or "none" to
+#                        forbid VRRP here). Set it: without one the edge follows the server's configuration alone.
+# - stop_grace_period    on stop the edge releases the address first, so the senders move to a peer at once.
+#
+# A killed container takes its network namespace's addresses with it only when it has its own; with the host's the
+# address stays on the interface after a hard kill (docker kill, power loss) until the container starts again or you
+# run `ip addr del <address>/32 dev <interface>`. A normal stop removes it.
+name: seshat-edge-vrrp
+
+services:
+  seshat-edge:
+    image: ${SESHAT_IMAGE:-ghcr.io/root-chain-ventures-llc/seshat:0.7.0}
+    restart: unless-stopped
+    network_mode: host
+    user: "0:0"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    cap_add: [NET_ADMIN, NET_RAW, NET_BIND_SERVICE, DAC_OVERRIDE]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    stop_grace_period: 20s
+    command: ["--role", "edge"]
+    env_file:
+      - path: .env.edge
+        required: false
+    environment:
+      SESHAT_ROLE: edge
+      SESHAT_LISTEN: "127.0.0.1:8082"   # status page, local only
+      SESHAT_SNMP_TRAP_LISTEN: ":162"
+      SESHAT_SYSLOG_UDP_LISTEN: ":514"
+      SESHAT_SYSLOG_TCP_LISTEN: ":514"
+      # The most the server may make this edge hold (CIDRs or addresses, comma separated; "none" forbids VRRP here).
+      # SESHAT_EDGE_VRRP_CEILING: 192.0.2.0/24
+    volumes:
+      - seshat-edge-data:/data
+
+volumes:
+  seshat-edge-data:

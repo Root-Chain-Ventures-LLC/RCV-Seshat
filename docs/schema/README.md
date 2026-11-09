@@ -51,6 +51,7 @@ the Device Tracker portal are built against it.
 | `seshat.tracker` | event | Device Tracker sightings and interval changes | `logs-seshat.tracker-exo` |
 | `seshat.device` | state | device knowledge-base records | `logs-seshat.device-exo` |
 | `seshat.metric` | metric | streaming-telemetry samples (gNMI, Cisco MDT, Juniper JTI, Dell OS10) | `logs-seshat.metric-exo` |
+| `seshat.reachability` | event | Device Tracker reachability changes: a tracked device went down, came back up or restarted ([Device Tracker, Reachability](../device-tracker.md#reachability)) | `logs-seshat.reachability-exo` |
 | `seshat.passthrough` | event | the original message of an input with passthrough on, untouched (see [`passthrough.md`](passthrough.md)) | `logs-seshat.passthrough-exo` |
 
 Unknown devices produce the full event with `seshat.device.status: unknown`; the schema has no
@@ -104,7 +105,7 @@ logs-<dataset>-<namespace>        e.g.  logs-seshat.trap-exo
 ```
 
 - `<dataset>` is the literal `event.dataset` value (`seshat.trap`, `seshat.syslog`, `seshat.flow`,
-  `seshat.flow_rollup`, `seshat.tracker`, `seshat.device`, `seshat.metric`, `seshat.passthrough`). It contains a dot and, for
+  `seshat.flow_rollup`, `seshat.tracker`, `seshat.device`, `seshat.metric`, `seshat.reachability`, `seshat.passthrough`). It contains a dot and, for
   `flow_rollup`, an underscore, but **never a hyphen** (Elasticsearch splits the stream name on
   hyphens, so a hyphen in the dataset would break the type/dataset/namespace parse).
 - `<namespace>` is `org_short` lowercased (default brand `RCV` gives `rcv`). `org_short` is

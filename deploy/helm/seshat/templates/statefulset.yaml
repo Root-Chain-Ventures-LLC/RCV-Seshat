@@ -89,6 +89,7 @@ spec:
             {{- include "seshat.containerSecurityContext" . | nindent 12 }}
           env:
             {{- include "seshat.env" (list . $role) | nindent 12 }}
+            {{- include "seshat.clusterEnv" . | indent 12 }}
             {{- include "seshat.listenerEnv" . | nindent 12 }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}

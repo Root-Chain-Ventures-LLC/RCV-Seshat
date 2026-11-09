@@ -56,6 +56,7 @@ server: the edge pulls it.
 | Packs | The server's pack directories (tar.gz, ETag). A change restarts the edge's pipeline. Until the first sync it uses the packs shipped with the image. |
 | Pollers | The Device Tracker pollers (FDB, ARP, ND, wireless, subscriber tables, per the packs) and the knowledge base's SNMP lookup, for the tracked devices an administrator assigned to this edge ([Polling on the edge](#polling-on-the-edge)). None until a device is assigned. Their results travel on the same stream as the events. |
 | Relay | Off by default. When an administrator turns it on and lists the hosts it may reach, the edge opens TCP connections to them for authorised clients ([Relay](#relay)). It runs on its own connection to the server and goroutines, never on the event path. |
+| Shared address | For a member of an [edge group](#edge-groups) whose group has a VRRP configuration, the built-in VRRP engine, so that the members share one receiving address ([VRRP on the edges of a group](#vrrp-on-the-edges-of-a-group)). None for an edge in no group and for a group without one. |
 | State | Only `edge.json`, the queue, the packs and the KB snapshot. No database file is ever written; the components that expect a store get a private in-memory one. |
 
 Changing the configuration, the packs or the listen addresses restarts the edge's pipeline inside the
@@ -225,6 +226,11 @@ Further files live next to it, all mode 0600:
   removed when the reads are switched off.
 - `telemetry-secrets.enc`: the TLS key of the dial-out listener and the dial-in targets with their credentials, only on
   an edge that has them ([Streaming telemetry](#secrets-on-the-edge)); encrypted like `snmp-profiles.enc`.
+- `vrrp-key.enc`: the advertisement key of the edge's group ([VRRP on the edges of a group](#vrrp-on-the-edges-of-a-group)),
+  only on a member whose group has a VRRP configuration. Not in `edge.json` (which keeps the rest of the section and says
+  the key is in this file); encrypted like `snmp-profiles.enc`, with the same limits of what that protects. It is what lets a
+  restarted member run VRRP on its last configuration while the server is unreachable. It is removed when the
+  configuration is.
 - `kb-snapshot.json.gz` and `packs/` (not secret).
 
 ## Streaming telemetry
@@ -273,6 +279,10 @@ target's own address is reachable from the edge. The edge gets the targets in it
 the passwords and client keys, over the authenticated channel; they are not part of the stored edge
 configuration and are never returned by an API. The targets apply live, without restarting the pipeline.
 
+**A target can name an edge group** (`run_on: "group:<id>"`, [Edge groups](#edge-groups)): the placement reconciler
+assigns it to one healthy member, the member dials it on the group's lease instead of `telemetry.lease_minutes`, and the
+server never dials it. The group needs a member first; a target that names a group that does not exist is refused.
+
 **Settings are the store's, not a replica's.** In a cluster the settings (`inputs.telemetry`) live in the
 database. Who owns a target is worked out from the stored copy: every replica re-reads it on the change
 notification and every 30 s, and an edge is served the targets straight from the store, whichever replica
@@ -304,6 +314,12 @@ An edge that is cut off cannot learn that a target was moved, so it does not dia
   most 1440, never less than three sync intervals). When the lease runs out the targets stop (samples
   already collected still go upstream from the disk queue) and they start again at the next answer.
 * A refusal of the edge's credentials (revoked, deleted) stops them at once.
+
+The targets an **edge group** assigned to the edge (they carry `group` in the configuration) have a fence of their own:
+the group's lease (`lease_secs`, 60 s by default), counted from before the request that got the server's answer was sent,
+on a monotonic clock and the wall clock. When it ends the sessions of those targets are closed, a dial in progress
+included, and they start again at the next answer. The targets the edge owns by its own id keep `lease_minutes`, also on
+a member of a group. `seshat_edge_telemetry_group_fence_open` says whether the group's targets may run.
 
 The status page, `/metrics` (`seshat_edge_telemetry_fence_open`) and the report to the server say whether the
 fence is open and, if not, why. The cost is on the isolated side of a long server-link outage: no dial-in
@@ -383,6 +399,7 @@ Every write is in the audit log (the token never is). The enrolment token is ret
 | `SESHAT_EDGE_INSECURE_SKIP_VERIFY` | Evaluation only. |
 | `SESHAT_EDGE_RELAY_CEILING`, `SESHAT_EDGE_RELAY_CEILING_FILE`, `SESHAT_EDGE_RELAY_MAX_MODE` | The edge's own bound on the relay the server may configure ([Relay](#the-edge-local-ceiling)). |
 | `SESHAT_EDGE_SNMP_CEILING`, `SESHAT_EDGE_SNMP_CEILING_FILE` | The edge's own bound on where SNMP reads may go ([SNMP reads](#the-edge-local-ceiling-for-snmp-reads)). |
+| `SESHAT_EDGE_VRRP_CEILING`, `SESHAT_EDGE_VRRP_CEILING_FILE` | The edge's own bound on the addresses its group's VRRP configuration may make it hold ([the edge-local ceiling for VRRP](#the-edge-local-ceiling-for-vrrp)). |
 | `SESHAT_EDGE_SNMP_SOURCE` | The address, or the name of the network interface, the edge sends SNMP to devices from (the reads and the pollers). Wins over the server's `snmp_read.source_address` ([Poll source address](#poll-source-address)). |
 | `SESHAT_SNMP_TRAP_LISTEN`, `SESHAT_SYSLOG_UDP_LISTEN`, `SESHAT_SYSLOG_TCP_LISTEN`, `SESHAT_FLOW_*_LISTEN` | Local listen addresses, used when the server's configuration leaves them empty. |
 | `SESHAT_PACKS_DIR` | Packs shipped with the install; the server's packs replace them. |
@@ -392,7 +409,9 @@ Prometheus: `/metrics` on the status listener (`seshat_edge_link_up`, `_assigned
 `_events_in_total`, `_events_sent_total`, `_events_rate_limited_total`, plus the usual input, queue and KB
 families and process metrics); on the server `seshat_edge_up`, `_last_seen_timestamp_seconds`,
 `_queue_depth`, `_lag_seconds`, `_events_received_total`, `_events_duplicate_total` per edge, plus
-`seshat_edge_sequence_jumps_rejected_total` and `seshat_edge_auth_refused_total{reason}`.
+`seshat_edge_sequence_jumps_rejected_total` and `seshat_edge_auth_refused_total{reason}`. A member of a group with VRRP
+also exports `seshat_edge_vrrp_*` on the edge and the server `seshat_edge_group_vip_holder{group,instance,edge}`
+([Status and metrics](#vrrp-status-and-metrics)).
 
 ## Health on the Edges page
 
@@ -494,6 +513,14 @@ and end, bytes in each direction and the outcome (`target_closed`, `server_close
 `idle_timeout`, `max_duration`, `max_bytes`, `policy_revoked`, `edge_shutdown`, `edge_dropped`, `error`, or
 `refused` with the code); a client that disconnects while the edge is still opening the relay is
 `client_closed`. The payload is never logged.
+
+**To an edge group.** `POST /api/edge-groups/{id}/relay` takes the same body, headers, errors and audit records and opens the
+session through one member of the group that has a control connection to a server node ([Edge groups](#relay-and-snmp-reads-through-a-group)).
+An integration client needs `edge.relay.tcp` and the entry `group:<id>` in the `edges` list of its scope (or `*`): a scope
+that lists the members does not reach the group, and one that lists the group does not reach its members by
+`POST /api/edges/{id}/relay`. Two more errors: `404 not_found` for a group that is not there, and `409
+group_policy_differs` while the members' relay sections differ. The audit records have the `group`, the
+member the session ran through as `edge` and `members_tried`.
 
 An integration client may hold at most 2 relay sessions open at once unless its limits set another number
 (`"limits": {"edge.relay.tcp": {"concurrent": 4}}`); beyond it, `429 limit_exceeded`.
@@ -654,13 +681,16 @@ statement of where credentials may go). With no ceiling the reads follow the pus
 logs a warning when they are enabled that way and the status page says so. A ceiling that cannot be parsed keeps the
 reads off.
 
+The same ceiling bounds the scheduled polls and the ICMP echoes of the [reachability probes](#reachability-probes): an address
+outside it is never pinged.
+
 ### The API
 
 All three routes need an administrator token, or an [integration client](integrations/README.md) token that holds
 `edge.snmp.read` and whose scope names the edge (`out_of_scope` otherwise; the client's rate limit answers
 `429 limit_exceeded`).
 
-**`POST /api/edges/{id}/snmp`**
+**`POST /api/edges/{id}/snmp`** (and `POST /api/edge-groups/{id}/snmp`, [below](#relay-and-snmp-reads-through-a-group))
 
 ```json
 {"target": "192.0.2.10",
@@ -754,6 +784,8 @@ floor stops a client from promising a rate the administrator does not want to se
 `min_interval_s` a window may name, default and lowest 10 s). and a window that has ended, or
 that someone altered, answers `window_expired`. A target the window does not list is a `400`. The edge does the
 counting, because it is the one place that sees every request to its devices whichever node they came in by.
+Through an edge group the server keeps the same account for the whole group, so that a client does not get more by
+going through the group ([Edge groups](#relay-and-snmp-reads-through-a-group)).
 
 ### Sealed one-shot credentials
 
@@ -814,19 +846,19 @@ build-time scan for SNMP write calls reads this code as well.
 
 ### Who polls a device
 
-**One poller per device: the server, or one edge. Never both.** It is a setting:
+**One poller at a time per device: the server, one edge, or the one member of an [edge group](#edge-groups) the group assigned it to. Never two.** It is a setting:
 
-- **Per site**: *Polled by* `server` (the default) or `edge:<id>`, on the Tracked devices page (*Who polls the devices*, shown once an edge exists) or
+- **Per site**: *Polled by* `server` (the default), `edge:<id>` or `group:<id>`, on the Tracked devices page (*Who polls the devices*, shown once an edge exists) or
   `PUT /api/tracker/polling/sites/{site}` with `{"polled_by": "edge:<id>"}`. The edge must collect that site. It owns the
   devices of the site that are in **its VRF**; devices of the site in other VRFs stay with the server.
-- **Per device**, overriding the site: `PUT /api/tracker/devices/{id}/polled-by` with `""` (follow the site), `"server"`
-  or `"edge:<id>"`. The edge must hold the device's site and VRF (`400 validation_failed`, field `polled_by`).
+- **Per device**, overriding the site: `PUT /api/tracker/devices/{id}/polled-by` with `""` (follow the site), `"server"`,
+  `"edge:<id>"` or `"group:<id>"`. The edge (or the group) must hold the device's site and VRF (`400 validation_failed`, field `polled_by`).
 
 Both are for administrators and operators and are audited (`tracker.polling.site`, `tracker.device.polled_by`).
 `GET /api/tracker/polling` lists the sites, who polls each, how many of their devices an edge polls, and the edges with
-the health of their pollers. `GET /api/tracker/devices` shows the **owner** of every device: `owner.polled_by`
-(`server` or `edge:<id>`), where it comes from (`device`, `site`, `default`), the edge's name and state, and the
-device's own setting in `tracker.polled_by`. Only devices that are *enabled* for tracking are polled, as on the server.
+the health of their pollers, and the edge groups. `GET /api/tracker/devices` shows the **owner** of every device: `owner.polled_by`
+(`server`, `edge:<id>` or `group:<id>`), where it comes from (`device`, `site`, `default`), the edge's name and state (for a
+group, the member it assigned, in `edge_id`, and `group_id`), and the device's own setting in `tracker.polled_by`. Only devices that are *enabled* for tracking are polled, as on the server.
 
 What keeps the two apart:
 
@@ -835,13 +867,14 @@ What keeps the two apart:
 - The edge polls exactly the devices its configuration lists, and nothing else.
 - The server stores a poll result only from the edge that owns the device **now**, for a device in that edge's scope. A
   result from a former owner (a poll that was queued during an outage, or that finished after a hand-back) is refused and
-  counted (`seshat_tracker_edge_poll_refused_total{reason="not_owner"}`).
+  counted (`seshat_tracker_edge_poll_refused_total{reason="not_owner"}`). For a device an edge group owns the assignment is
+  read from the database for every result, so a member that lost the device is refused at once on every node.
 
 ### Changing the poller
 
 | Change | What happens |
 |---|---|
-| server to edge | The server's pollers stop at once (their replicas look at the setting every few seconds), also for a device that was queued for a worker. The edge learns of the device at its next configuration sync (its heartbeat asks for it within 30 s), adopts the schedule the server had (the same next poll, the same count of failures in a row, so no gap and no restart of the backoff), and does not poll it for 15 s after it became the edge's. |
+| server to edge | The server's pollers stop at once (their replicas look at the setting every few seconds), also for a device that was queued for a worker. The edge learns of the device at its next configuration sync (its heartbeat asks for it within 30 s; a member of an edge group heartbeats every 10 s), adopts the schedule the server had (the same next poll, the same count of failures in a row, so no gap and no restart of the backoff), and does not poll it for 15 s after it became the edge's. |
 | edge to server | The server waits **two minutes** before it polls the device (`hold_until` in the owner). The edge stops at its next sync, within a minute. A result the edge sends after that is refused. |
 | edge to another edge | The same two-minute wait protects the new edge (it is told how long to wait). |
 | the edge is deleted | What it polled goes back to the server, held off for the same two minutes, before the edge is deleted (an edge that is offline never hears that it is gone). |
@@ -866,7 +899,8 @@ and for **ten minutes** after the last confirmation. After that an offline edge 
 and relay, but stops its scheduled polls until it reaches the server again; a restart does not poll until the first sync.
 The trade-off: a link outage longer than ten minutes leaves a gap in the polls (the results are not buffered because they
 were never taken), in exchange for never double-polling a device the server gave to someone else while the edge was away. A
-poll already running finishes, and its result is refused if the device is no longer the edge's. The Edges page shows the pollers' health and warns when an offline edge
+poll already running finishes, and its result is refused if the device is no longer the edge's; for the devices an
+[edge group](#edge-groups) assigned to the edge the lease is shorter and a running poll is cancelled when it ends. The Edges page shows the pollers' health and warns when an offline edge
 polls devices; an alert on `seshat_edge_up == 0` covers the rest.
 
 ### Credentials, and the reads switch
@@ -934,6 +968,14 @@ setting naming the edge, or a device whose own setting does) is made **by the ed
 OIDs, the same facts and the same safety rules and budget as the pollers; the server stores what comes back. The profile
 that enables it is still Settings, Connectors, Active SNMP polling.
 
+For an [edge group](#edge-groups) the lookup of an address whose device the group assigned is made by the member that has the
+device and by no other, on the group's lease (it ends with it). While the device is being handed to that member, that is
+inside the hold and the short wait after the assignment, the lookup is **refused** with `handover_in_progress` (the member
+refuses it too, and `not_polled_here` for a device it does not list yet), as poll-now is; the knowledge base treats it as any
+failed lookup and asks again on its own schedule, so the lookup is not made to wait. An address that no member holds (no
+device record, or a device not yet placed) is looked up by the connected members in turn, lowest-numbered first, and the
+next is tried when one fails; it is not held.
+
 ### Poll source address
 
 A dual-homed edge should poll from its management-network address. `snmp_read.source_address` (Edges page, SNMP reads) is an
@@ -960,6 +1002,50 @@ a line per device with its status and next poll). On the edge `/metrics`: `sesha
 `seshat_tracker_edge_poll_results_total{status}`, `_observations_total` and `_refused_total{reason}` (`not_owner`,
 `out_of_scope`, `kind`, `malformed`).
 
+### Reachability probes
+
+With [reachability probes](device-tracker.md#reachability) on (the default; the tracker settings, with a per-site override, and
+`SESHAT_TRACKER_REACH=0` on a server node to turn them off there), the server sends the settings of the edge's site to every edge that polls devices (the `reach` part of the tracker section of the configuration: interval, echo
+count, timeout, failures before down, which checks), and the edge probes the devices it owns: an ICMP echo and a
+`sysUpTime.0` GET with the device's profile. The probe is the server's own prober, run under
+the edge's rules:
+
+- **One poller.** A device is probed by the edge that owns it, under exactly the conditions of a scheduled poll: the edge
+  lists it, the hand-over wait the server set is over (`not_before_s`: the previous poller may still be probing), and the edge
+  holds a valid lease. For a device of an [edge group](#edge-groups) the lease is the group's short lease, counted from before
+  the request that confirmed it, and **a probe that is running when the lease ends is cancelled and sends nothing**; a probe
+  that finishes after the device was handed to another member is dropped too. The server checks the same thing again when the
+  result arrives: a result is taken only from the edge (and, for a group, the member) that the database says owns the device
+  *now*, so a hand-over never has two members probing the device or two sets of results. Nothing is probed by the edge
+  after the settings go (the server turned the probes off, or the edge left the device list).
+- **The never-poll list and the ceiling.** An echo goes only where an SNMP request may go. Before a packet leaves, the edge
+  applies the never-poll addresses (loopback, link-local, multicast, unspecified), the edge-local
+  [ceiling](#the-edge-local-ceiling-for-snmp-reads) (`SESHAT_EDGE_SNMP_CEILING`) and the pushed allow-list, the checks
+  the polls use; a refused target is not pinged and its result names the rule (`never_poll`, `edge_ceiling`, `edge_allow_list`),
+  counted with the polls' refusals in `seshat_edge_poll_refused_total{rule}`. The SNMP read goes through the poller's session
+  and takes its slots from the same per-device budget as the polls.
+- **ICMP sockets.** The edge opens an unprivileged ICMP datagram socket when the host's `net.ipv4.ping_group_range` includes
+  the edge's group, else a raw socket when it has `CAP_NET_RAW`. With neither, ICMP is unavailable on that edge: its status page
+  shows `icmp unavailable: <reason>`, `seshat_edge_poll_reach_icmp_available` is 0, each result carries the reason and the
+  server shows it on the device and in the status; the SNMP check carries on, and no device is called down because of it.
+  How to grant either (the default `seshat-edge` unit and `compose.edge.yaml` grant none and are unchanged):
+  [Device Tracker, Reachability](device-tracker.md#reachability), the compose override
+  [`deploy/compose/reach-icmp.example.yaml`](../deploy/compose/reach-icmp.example.yaml) and the `CAP_NET_RAW` drop-in
+  ([packaging](packaging.md#capabilities)). The echo leaves from the host's routing address (the poll source address
+  setting applies to SNMP only).
+- **Results upstream.** Each probe is one poll record of the kind `reach` on the stream, in the same disk queue (it is
+  counted in the 80 % share of poll results). The edge sends what it measured and nothing else; **the state, the metric
+  samples and the `seshat.reachability` events are made by the server**, which keeps the state in its database, so a device that
+  changes hands, or an edge that is replaced, continues the same state without a spurious "up". The server bounds every
+  value (statuses, counts, times, strings), refuses a result for a device the edge does not own now, a result measured
+  before the edge owned it, results while its own probes are off, and a result for a device that follows another one by less than
+  half the probe interval (an edge that probes faster than it was told is flooding); these are counted as refused and never
+  retried. Over its own rate (200 records a second per edge with the poll records) the edge is asked to retry. A result that is
+  not newer than the last one taken for the device is dropped by the state.
+- **Status and metrics.** The edge's status page shows the reachability probes (settings, the ICMP socket, probes by
+  check and result, refusals, cancellations). On the edge `/metrics`: `seshat_edge_poll_reach_probes_total{check,result}`,
+  `_refused_total{rule}`, `_probes_cancelled_total`, `_send_failures_total`, `_icmp_available` and `_running`.
+
 ### What differs from polling from the server
 
 - An edge knows the devices of its own site and VRF only. When it decides whether the neighbour on a port is
@@ -971,6 +1057,715 @@ a line per device with its status and next poll). On the edge `/metrics`: `sesha
   edge can be lost until every replica is upgraded. Assign devices to an edge after the upgrade is complete.
 - Whether an edge is online is read from the database (when it was last heard from, by any replica), so every replica
   of a cluster agrees on it and on whether moving devices away from it needs `force`.
+
+### Metrics polls on the edge
+
+The metrics class (docs/device-tracker.md, "SNMP metric polling") runs on the edge that owns the device, by the same
+ownership as the tracker polls: the server leaves the device alone, the edge is served the metrics settings with it
+(interval, interface filters, series cap), and a group member polls it only inside the group's lease. The samples enter
+the edge's pipeline as `seshat.metric` events, under the telemetry rate limit (`telemetry.max_events_per_second`) and its
+share of the upstream queue, and travel on the event stream; the server marks them with the edge and the site. A poll the
+limit cut short is reported `partial` with the number dropped. The status of each metrics poll is a record of its own on the
+same stream (`metrics`: status, error, series, next poll), so the Tracked devices page shows it whoever polls.
+
+When the group lease ends, the metrics poll running on a member is cancelled before it emits anything: its requests stop,
+no samples and no status record are sent, and the member that takes the device over waits out the hand-over hold before its
+first metrics poll, as it does for the tracker poll. The metrics class has its own schedule (60 s spread inside the
+interval), so a device handed over starts its metrics cadence at a spread time after the hold rather than inheriting the
+previous poller's.
+
+## Edge HA
+
+Edge HA keeps an edge's work going when one edge host stops. It has two halves, set up independently on the server for a
+**group** of edges:
+
+- **Receiving.** Syslog, traps, flows and telemetry dial-out reach one shared address, held by one member at a time. If the
+  holder stops, another member takes the address within seconds ([VRRP on the edges of a group](#vrrp-on-the-edges-of-a-group)).
+- **Pulling.** Device polling, the knowledge base's SNMP lookups, telemetry dial-in targets, the TCP relay and on-demand SNMP reads
+  are done by one member at a time. If that member stays away for the group's grace time, the server gives its share to the others
+  ([Edge groups](#edge-groups)).
+
+The server hosts of a cluster have their own, separate high availability ([`ha.md`](ha.md)). This chapter is about the edges.
+
+### What a group is, and when to use one
+
+A group is a named set of edges of **one site and one VRF**. An edge is in one group at most. The group has timing (grace,
+lease, damping), an optional shared address, and the work that names it: a site or device whose *Polled by* is `group:<id>`,
+a telemetry target whose *Run on* is `group:<id>`, and relay and SNMP-read requests addressed to the group. Every device and
+target still has exactly one poller at any moment: the server picks one healthy member for it.
+
+Use a group when the network behind an edge can only be reached through edges and one edge host is a single point of failure
+for it: two or three edge hosts on that network, one of them dying should not stop the polling, the telemetry or the events.
+The pulling half works with members on any network the devices can be reached from. The shared address needs all members on
+one layer-2 segment that forwards multicast `224.0.0.18`.
+
+Do not use a group when a single edge is enough, when the edges are on different networks (a group's members share a site and
+VRF, and the devices must be reachable from each of them), or on SQLite nodes that sync as cluster peers (refused,
+[Edge groups](#edge-groups)). A group without a shared address still shares the pulling; the devices then send
+to a member's own address, or to an address kept by something else such as keepalived.
+
+### What moves, and how fast
+
+| What | Moves when | How long (defaults) | Set by |
+|---|---|---|---|
+| Receiving address | the holder stops cleanly (SIGTERM, `docker stop`, `systemctl stop`) | under a second: 0.69 s measured | `advert_interval_ms` |
+| Receiving address | the holder is killed, dies, or is cut off from the segment | 3.2 to 4 s predicted; 3.6 s measured | `advert_interval_ms` |
+| Receiving address | the holder is cut off from the server but still on the segment | its priority drops after `link_down_secs`, then a healthy member takes the address after the preempt delay: 26.4 s measured with `link_down_secs` 10 and a preempt delay of 15 s | `health`, `preempt_delay_ms` |
+| Devices and telemetry targets | the server has not confirmed the member for the grace | 120 s after the last confirmation. The member's own lease (60 s) ended before that, so it has stopped | `grace_secs`, `lease_secs` |
+| Relay and SNMP reads | per request, the next healthy member is asked | at once, but only if the request was proved not sent | none |
+| A member that returns: devices and targets | it has been healthy for the damping time | 300 s, then a tenth of the devices at a time (1 to 50), each waiting out a hold | `rebalance_damping_secs` |
+| A member that returns: the address | the member has a higher priority than the holder | after the preempt delay (30 s by default); 18.6 s measured with a delay of 15 s | `preempt_delay_ms` |
+
+The measured times are from a run with three edges, priorities 120, 100 and 80, an advertisement interval of 1 s and
+`link_down_secs` 10, on two Docker bridges. The moves of devices and targets follow from the settings; they are covered by
+tests with shortened timing and have not been timed on a live group.
+
+**Grace, lease and damping.**
+The **lease** is how long a member keeps polling after the server last answered it. The server asks group members for a
+heartbeat every 10 s, so a lease of 60 s is six chances to renew. When the lease ends, the member cancels the polls and the
+dial-in sessions that are running; it does not let them finish. The **grace** is how long the server waits, counted from the
+last answer it gave the member, before it moves that member's share. It must be at least the lease plus 30 s, so the member has
+stopped before anything moves and nothing is polled twice. The **damping** is how long a member that came back must stay
+healthy before it is given devices again.
+
+**Holds.** A device or target that moves away from a member that may still be running (a rebalance, a removal, a deleted
+group, a setting changed to another owner) is held: the new owner waits at least two minutes, and at least the lease of the
+member it came from, before it starts. A move away from a member that has been silent for the whole grace needs no hold,
+because its lease ended 30 s before the grace did. While a device is in a hold, poll-now answers `409 handover_in_progress`
+and knowledge-base lookups for it are refused, because nobody is allowed to poll it yet.
+
+### Worked example: three edges, one address
+
+Three edges `edge-a`, `edge-b` and `edge-c` sit on one layer-2 segment, `192.0.2.0/24`, at site `site-1`. They have the
+addresses `192.0.2.21`, `192.0.2.22` and `192.0.2.23`. The devices send syslog, traps and flows to one address,
+`192.0.2.10`. The server polls nothing here; the group does: `Example Switch 1` to `Example Switch 3` are polled by SNMP, a
+router at `192.0.2.101` is read by JTI dial-in, and an operator uses the relay to reach a host at `192.0.2.150:22`. Polling,
+the JTI target and the relay should all survive the loss of one member.
+
+1. **Enrol the edges.** On the server, Edges, *Add edge* three times: site `site-1`, the ids `edge-a`, `edge-b`, `edge-c`.
+   On each box run `seshat edge enroll` with its token and start the edge ([Setting one up](#setting-one-up)). All three must
+   run this release, and the server nodes must be upgraded first. Check that each shows `online`.
+
+2. **Create the group and add the members.** Edges, *Edge groups*, *New group*: site `site-1`, the name `Segment 1`, the id
+   `seg1`. Open it (*Manage*) and add the three edges with *Add a member*. The same by API:
+
+   ```
+   POST /api/edge-groups
+   {"id": "seg1", "name": "Segment 1", "site": "site-1"}
+
+   POST /api/edge-groups/seg1/members
+   {"edge_id": "edge-a"}
+   ```
+
+   (again for `edge-b` and `edge-c`). Only enrolled edges of the group's site and VRF that are in no group can join.
+
+3. **Name the group where an owner is chosen.**
+   - Polling: Device Tracker, *Who polls the devices*, site `site-1`, *Polled by* the group; or
+     `PUT /api/tracker/polling/sites/site-1` with `{"polled_by": "group:seg1"}`. A single device can override the site
+     (`PUT /api/tracker/devices/{id}/polled-by`). The server now assigns the devices evenly to healthy members, within
+     10 s.
+   - JTI dial-in: Inputs, Telemetry, the target for `192.0.2.101`, *Run on* the group; or `"run_on": "group:seg1"` in the
+     target. The same applies to gNMI targets.
+   - Relay and SNMP reads: nothing to set on the group. Give the three members the **same** `relay` and `snmp_read` sections
+     (Edges, *Configure*), with `192.0.2.150:22` in the relay's allow-list, and address requests to
+     `POST /api/edge-groups/seg1/relay` (and `/snmp`). While the members' sections differ the group's routes answer
+     `409 group_policy_differs`, and the group view says which sections differ.
+
+4. **Configure the shared address.** In the group, *Shared receiving address*, *Set up*; or:
+
+   ```
+   PUT /api/edge-groups/seg1/vrrp
+   {"instances": [{"name": "receive", "vrid": 51, "vips": ["192.0.2.10"],
+                   "priorities": {"edge-a": 120, "edge-b": 100, "edge-c": 80}}]}
+   ```
+
+   The VRID must not be used by another VRRP speaker on the segment, including the server cluster's own. The first save makes
+   the group's advertisement key. The server refuses a configuration whose penalties cannot work with these priorities
+   ([Health penalties](#vrrp-on-the-edges-of-a-group)); the status may still show advisory warnings about them.
+
+5. **Grant the capabilities** on each member. VRRP needs `CAP_NET_ADMIN` and `CAP_NET_RAW`, which the default unit does not grant:
+
+   ```
+   install -D -m 0644 /usr/share/seshat-edge/systemd/drop-ins/edge-vrrp.conf /etc/systemd/system/seshat-edge.service.d/edge-vrrp.conf
+   systemctl daemon-reload && systemctl restart seshat-edge
+   ```
+
+   For containers use [`deploy/compose/edge-vrrp.example.yaml`](../deploy/compose/edge-vrrp.example.yaml). Without them the
+   member reports VRRP `unavailable` and names the missing capabilities; it tries again every 5 s. If you want an
+   edge-local limit on the addresses a member may hold, set `SESHAT_EDGE_VRRP_CEILING=192.0.2.10` on it
+   ([The edge-local ceiling for VRRP](#the-edge-local-ceiling-for-vrrp)).
+
+6. **Point the devices at the address.** Syslog, trap and flow destinations: `192.0.2.10`. For dial-out telemetry, the
+   collector address `192.0.2.10` and the port of the members' dial-out listener. Give the three members the same listener
+   settings (Edges, *Configure*): the group does not copy them from one member to another. Events keep the sending device's own
+   source address whichever member receives them.
+
+7. **Allow every member's address on the devices.** Polling, SNMP reads, JTI and gNMI dial-in and the relay's connections leave
+   from the member that has the work, from the member's **own** address (or the one set in `snmp_read.source_address`), never
+   from `192.0.2.10`. So in each device's SNMP access list, in the management-plane access list for the dial-in port, and on
+   any firewall between, allow `192.0.2.21`, `192.0.2.22` and `192.0.2.23`, not only one of them. A member that is not
+   allowed shows up only when the work first lands on it.
+
+8. **Check.** The group's row on the Edges page should read `3 of 3 healthy`. Open it: exactly one member says *Holds the
+   address* for `receive`, with the others *Standing by*; the three members share the devices and the target (for example
+   `3 of 7 devices`); *Unassigned* counts are 0; the last move reads *none yet*. `GET /api/edge-groups/seg1` has the same, and
+   the metric `seshat_edge_group_vip_holder{group="seg1"}` is 1 for one member only. Send a syslog message to `192.0.2.10`
+   and see it arrive stamped with the edge that held the address. On a fresh start expect the first holder about half a
+   minute after the first save: the members get the new section at their next 10 s heartbeat, and the member with the highest
+   priority takes the address after the preempt delay.
+
+### When a member stops, and when it returns
+
+`edge-a` holds `192.0.2.10`, polls part of the devices and dials the JTI target. Stop it.
+
+- **At once.** A clean stop releases the address and sends a priority-0 advertisement: `edge-b` holds it within a second
+  (0.69 s measured). A kill, a crash or a pulled cable takes 3.2 to 4 s (3.6 s measured). The group view shows the new holder and
+  the reason of the transition (`master_down`, `peer`), and `seshat_edge_group_failovers_total{reason}` counts it. The devices
+  keep sending to the same address and need no change.
+- **Within the lease.** `edge-a` stops heartbeating. If it is running but cut off from the server, its lease ends 60 s after the
+  server's last answer and it cancels its polls and its dial-in session. Its share is still `edge-a`'s in the server's records.
+- **At the grace.** 120 s after the server's last answer from `edge-a` the member is `gone`. The server moves its devices and its JTI
+  target to `edge-b` and `edge-c`, the least loaded first, in one batch with one audit record (`edge.group.move`, reason
+  `member_offline`), and no hold, because the lease is over. The *Last move* line reads `member_offline`. Until then, for up to two
+  minutes, those devices are not polled. Events are not affected: they went to the new holder from the first second.
+- **Relay and SNMP reads.** A new request goes to a healthy member. A request that went to `edge-a` before it stopped is not
+  repeated on another member unless it was proved not sent; a relay session that was open through `edge-a` ends and is not
+  reopened by itself.
+
+Start `edge-a` again.
+
+- **The address.** `edge-a` has the highest priority, so it takes the address back after the preempt delay: 30 s by default, 18.6 s
+  measured with a delay of 15 s. The address moves a second time, briefly. If you would rather it stayed where it is, give
+  the members equal priorities or turn `preempt` off (health-driven failover needs it).
+- **The share.** Nothing moves for 300 s (the damping). Then the group gives `edge-a` a tenth of its devices at a time (at least
+  one, at most 50), each through a hold of at least two minutes, so no device is polled by two members. It ends evenly spread again.
+
+If the whole server side is unreachable, see the first trade-off below: members stop polling after their lease, while receiving
+and the address carry on.
+
+### Trade-offs
+
+Edge HA trades some things for others. These are the ones to know before you rely on it.
+
+- **A server outage longer than the lease stops polling and dial-in.** A member cannot tell "I am cut off" from "the server is
+  down". If the whole server side is unreachable for longer than the lease (60 s by default), every member stops polling the
+  devices of the group and closes its dial-in sessions until it hears from the server again. Events keep buffering and
+  receiving, and the shared address does not depend on the server link. To ride out longer outages raise `grace_secs` and
+  `lease_secs` together; the price is a slower failover.
+- **Knowledge-base lookups are refused during a hold.** A lookup of a device that is in a hold answers `handover_in_progress`
+  (on the server and on the edge). The knowledge base treats it as "ask again later".
+- **SQLite with peers is refused.** On SQLite nodes that sync as cluster peers, creating a group answers `409 groups_unavailable`
+  and an existing group is not rebalanced, because no one place could decide who polls a device. A single SQLite node and
+  PostgreSQL work.
+- **A member with a broken poller keeps its share.** Health is the server's confirmation of the member and nothing else. A member
+  whose link works but whose poller cannot reach the devices (no route, a full queue, a crashed worker) stays healthy and keeps
+  its devices; the poll health it reports on the Edges page is not used for placement.
+- **Two holders of the address are possible.** If the segment splits so that two parts of the group cannot hear each other, each
+  part elects a holder. The same happens to a member that stays cut off from the server through a key rotation (the two minutes in
+  [Rotating the key](#rotating-the-key)): it keeps the old key, hears nobody it can trust and claims the address itself. A member
+  that was removed from the group while offline, and is still running on the segment, does the same until it hears the server
+  (which tells it to stop). Take such an edge off the segment, or stop it.
+- **Sealed SNMP credentials do not work on a group.** A sealed credential is sealed to one edge's key, and the group route does not
+  know which member will take the request. Group SNMP routes take profile credentials only; a sealed credential is refused with
+  `400 validation_failed`.
+- **The SNMP spacing gate is per server node.** The group's per-client, per-device spacing is counted in memory on each server
+  node and is not shared. A read that arrives on another node has that node's account, so a client's budget is one per node until
+  the edge's own spacing answers. Across a failover on one node the account holds.
+- **Group requests are refused while the members' sections differ.** The relay route answers `409 group_policy_differs` while the
+  members' `relay` sections differ, and the SNMP routes while their `snmp_read` sections differ. Every member counts, whether or
+  not it is up. The edge-local ceilings (`SESHAT_EDGE_RELAY_CEILING`, `SESHAT_EDGE_SNMP_CEILING`) are in each edge's environment,
+  which the server cannot see: set them alike.
+- **Holds compare addresses, not names.** A telemetry target given by DNS name and the same device given by IP address are not
+  matched when holds are checked: that would need a lookup a settings change does not make. Use one form for a device.
+- **The hold list is capped.** The telemetry settings keep at most 4000 records of targets that left their owner (the ones that end
+  last are kept).
+- **Upgrade order.** Upgrade every server node before the first group is created or used, then the edges. A server node that does not
+  know `group:<id>` reads such a setting as unset and polls the device itself, next to the group. An edge of an older release is
+  never confirmed, so it is never healthy and is given no work, and it takes no part in the address election.
+- **Server clocks.** Server nodes of one cluster must keep their clocks within a few seconds; the 30 s between lease and grace is meant to cover it.
+
+### Groups on the Edges page
+
+Edges, *Edge groups*. Each group is a row: name, id, site and VRF, its devices and targets, who holds the address, how many members
+are healthy, and a count of warnings. *Manage* (administrators) or *Details* (everyone else) opens the group:
+
+- **Warnings**, from what the server reports: members that are old or have never been confirmed, no healthy member, devices and
+  targets without a member, relay or SNMP-read sections that differ, a VRID the server cluster also uses, penalties that cannot do
+  their job, more than one holder.
+- **Members**, with their state (`healthy`, `not answering` for suspect, `gone`), when the server last answered them, and their
+  share of the devices and targets. Administrators add enrolled edges of the group's site and VRF and remove members; a removal
+  says that the share moves with holds and that the key is rotated.
+- **Shared receiving address**: per address, who holds it, and for each member its VRRP state, its priority now and as set, and
+  the last change with its reason. Administrators edit the configuration (addresses, interface and a per-member interface, priorities,
+  preempt, delays, health penalties), rotate the key after a confirmation that says what a rotation does, or remove the address.
+  The key itself is never shown (`auth_key_set` only). A refusal from the server appears on the field it names.
+- **Settings**: name, lease, grace and damping. Site and VRF are fixed once the group exists.
+
+Wherever an owner is chosen the list offers the groups of the right site: *Who polls the devices* (site and device), and *Run on* for
+a telemetry target. The page shows the member a group has assigned, and moving away from a member that is offline keeps the
+confirmation step it had. Viewers and operators see all of this and change none of it: group changes are for administrators; choosing
+who polls a site or device stays with administrators and operators.
+
+The sections that follow are the reference for each part: [Edge groups](#edge-groups) (placement, the lease, telemetry targets, the relay and SNMP
+reads) and [VRRP on the edges of a group](#vrrp-on-the-edges-of-a-group) (the shared address, its key, penalties and capabilities).
+
+### Edge groups
+
+An **edge group** is a named set of edges of one site and VRF that share the polling of the devices that name the group.
+Where one edge polls a network and it is the only way in, that edge is a single point of failure for the polling: its
+devices stay `edge_offline` until an operator moves them. In a group the server assigns every device to one healthy
+member, and moves a member's devices to the others when it stays away. The same holds for telemetry dial-in targets, and a
+relay or an SNMP read can be addressed to the group. This is the part of edge high availability that moves the pulling:
+polling, telemetry targets, the relay and the reads. The members can also share one receiving address
+([VRRP on the edges of a group](#vrrp-on-the-edges-of-a-group)).
+
+**Setting one up.** On the Edges page, *Edge groups* (see [Groups on the Edges page](#groups-on-the-edges-page)), or `POST /api/edge-groups` with `{"id": "...", "name": "...", "site": "...", "vrf": "..."}` and the timing
+below; `POST /api/edge-groups/{id}/members` with `{"edge_id": "..."}` for each enrolled edge (`DELETE
+/api/edge-groups/{id}/members/{edge}` takes one out). Every member collects the group's site and VRF, and an edge is in one
+group at most. Then set *Polled by* of the site, or of single devices, to `group:<id>` (the group needs a member first).
+Administrators change groups; everyone who may read the edges can read them (`GET /api/edge-groups`, `GET
+/api/edge-groups/{id}`: members with their state and share, the devices of the group and how many have no member, the last
+failover and its reason). Changes are audited (`edge.group.create`, `.update`, `.delete`, `.member.add`, `.member.remove`).
+An `edge:<id>` setting works as before, also for a member.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `grace_secs` | 120 | A member counts as gone, and its devices move, this long after the server last confirmed it. |
+| `lease_secs` | 60 | A member polls this long after the server last confirmed it (30 to 3600). |
+| `rebalance_damping_secs` | 300 | A member that came back must be healthy this long before it gets devices again. |
+
+The server refuses a `grace_secs` shorter than `lease_secs + 30`: the margin is what makes a move safe (below).
+
+**The lease of a member.** The server asks the members of a group for a heartbeat every 10 s instead of every 30 s (the
+heartbeat reply says so; an edge in no group, and an older server, mean 30 s). Whatever the server answers to a heartbeat or a
+request for the configuration renews the member's lease, and the answer is built in one database transaction: the server
+advances the member's `confirmed_at`, reads the group and the devices assigned to the member in the same transaction (no
+cache in between), and builds the etag and the device list of the answer from that read. A move of a member's devices
+locks the same row and is made only if `confirmed_at` is still the value it judged the member by, so either the
+confirmation comes first and the move is not made (`seshat_edge_group_moves_aborted_total`), or the move comes first and the
+confirmation reads the list after it: the etag the member presents no longer matches and nothing renews. If the
+transaction fails, or the owners cannot be read now, the answer renews nothing. The member counts its lease from the moment
+**before it sent** the request that was answered, on a monotonic clock, so a slow answer shortens the lease and the member's
+lease never ends later than the server's own reading (the server read the request after it was sent), with no comparison of
+the two clocks. The latest confirmation decides: a lease the server shortened applies from the first confirmation under it, and a
+confirmation whose request was sent earlier is ignored. The lease also ends when the wall clock says so (a host that was
+suspended, whose monotonic clock stood still); a wall clock set back does not extend it. A member renews only on a
+configuration it has fully applied: the etag in its heartbeat advances after the new device list is in force. For the
+devices the group assigned to it the member polls only while that lease runs; **when it ends, the polls that are running are
+cancelled** (the request in flight is not waited for, no further request is sent, nothing is sent or recorded for the poll),
+and so is a knowledge-base lookup of the group. A member's devices that it owns by its own id (`edge:<id>`) keep the
+ten-minute lease and are not cancelled.
+
+**Placement.** One reconciler, on the leader of a cluster (PostgreSQL) or on the one node, every 10 s:
+
+- A device that names the group and has no member goes to the least-loaded healthy member. Assignments are stored
+  (`edge_group_assign`) and stay where they are; devices that already have a member do not move for balance's sake.
+- A member is **healthy** when the server confirmed it in the last 30 s, **suspect** until the grace has passed since its last
+  confirmation (nothing moves), and **gone** after that. Only then are its devices moved, to the healthy members, least-loaded
+  first, in one batch with one audit record (`edge.group.move`: group, from, where to, reason `member_offline`, a sample of the
+  devices). The new member waits no more than the edge's usual 15 s: the old one's lease ended at least 30 s before the grace
+  did, so it has stopped, and a confirmation that lands before the write stops the move. For as long as the server has a record
+  of the member (its edge row), the member's grace is never less than the longest lease the server has served it plus 30 s: the
+  server raises that record before it serves a longer lease and lowers it only when the member presents the etag of a
+  configuration that carries the shorter lease (the etag covers `lease_secs`), and a lowering is written only if the record
+  still has the value it was decided on, so a shortened lease does not shorten the grace of a member that has not adopted it.
+  A member whose credentials were rotated is judged by its last real confirmation; one never confirmed, from its newest
+  assignment plus the grace. The hold of a device that leaves a member (a move, a release, a removal) is one lease of that
+  member: the longest it may be holding, or the group's if that is longer, counted from the moment the move is written. When
+  a member leaves the group or is deleted, that hold is stamped on its assignments in the same transaction, because its edge row
+  may be gone before the devices are moved.
+- **Health is the server's confirmation and nothing else.** A member whose heartbeats and configuration checks are
+  answered is healthy, whatever its pollers are doing: a member with a broken poller (no route to the devices, a full
+  queue, a crashed worker) but a working link keeps its share. The poll health it reports on the Edges page is not
+  used for placement.
+- After the server starts it judges nobody for one grace (a server that was down has heard from no one, which says nothing
+  about them), and with **no healthy member it moves nothing**.
+- A member that was gone and is back gets a share again only after it has been healthy, without a break, for
+  `rebalance_damping_secs`, and then a few devices at a time (a tenth of the group's devices, at least one and at most 50 per step) through the normal
+  hand-over: the new member is held off for the group's lease (at least the two minutes of a hand-back), the old one stops at
+  its next sync, and no further step starts while one is settling. A member that comes and goes inside the grace changes
+  nothing; one that is gone for longer loses its share once and does not get it back by being seen now and then.
+- A device that stops naming the group (its setting is changed) is released, not forgotten: its row keeps the member and the
+  hold of a hand-back until the hold has passed, so a device that names the group again waits for the member that may still be
+  polling it. A hold of the settings is never shortened by a later change either (a device that goes from a group to the
+  server and on to an edge waits out the group's lease).
+- A member taken out of the group, or a deleted edge, has its devices moved to the others with the same hold; the last member
+  cannot leave, or be deleted, while devices or telemetry targets name the group (`409 group_in_use`). Deleting the group hands the site and device settings and the telemetry targets that
+  name it back to the server, which is held off for the lease before it polls; nothing is left unowned or owned twice.
+- Metrics on the node that leads: `seshat_edge_group_members{state}` and `seshat_edge_group_failovers_total{reason}`
+  (`member_offline`, `member_removed`, `rebalance`; a batch counts once; `vip_master_down`, `vip_preempt`, `vip_started`
+  and `vip_other` count the times a member took over the shared address, on whichever node received the member's
+  heartbeat).
+
+**The cost.** A member cannot tell "I am cut off" from "the server is down". If the whole server side is unreachable for longer
+than the lease, every member stops polling the devices of its group until it hears from the server again; events keep
+buffering. Raise `grace_secs` and `lease_secs` together to ride out longer outages.
+
+**Where it works.** PostgreSQL (the leader runs the placement) and a single SQLite node. A SQLite node that syncs with
+peers is refused (`409 groups_unavailable`) and an existing group is not rebalanced there: each such node has its own
+database and takes itself for the leader, and the edge registry and the placement are not among what the peer protocol
+replicates, so no one place could decide who polls a device. Two server nodes must keep their clocks within a few seconds
+(the 30 s margin is meant to cover it). **Upgrade every server node before the first group is used**: a node that does not
+know `group:<id>` reads such a setting as unset and would poll the device itself. Upgrade the servers first, then the edges,
+as always. An edge of an older release does not say (in the `X-Seshat-Edge-Caps` header it sends) that it honours the group lease: it is
+served the devices it owns by its own id only, the server never confirms it, so it is never healthy and is assigned none.
+
+#### Telemetry targets on a group
+
+A dial-in target names a group with `run_on: "group:<id>"` in `PUT /api/inputs/telemetry`, as it names an edge with
+`edge:<id>`. The settings are the store's and a target has no row of its own, so the placement keys it by its **name**, in
+the table that holds the devices (`edge_group_assign`, key `target:<name>`; device ids start with `dev-`, so the two
+cannot meet). A target and a device are then one kind of work for the reconciler: the same guarded moves, holds,
+releases, audit records and metrics, and the same rules of the section above. The differences:
+
+- **Each kind is spread evenly by itself**, and the least loaded member gets the next item of a kind, ties broken by the
+  member with the fewest items of both kinds. A member that has the most targets is not also given the most devices, and
+  the rebalance evens out each kind on its own.
+- **The edge's fence is the group's lease** ([Fencing](#fencing-the-lease)). The server serves a member the group
+  targets the database assigns to it at its confirmation, read in the same transaction as for devices (the telemetry
+  input is given that share and serves no group target outside it), with the group's lease (`group_lease_secs` in the
+  telemetry section) and each target's hold. The etag covers when each target was assigned, its hold and the lease, so a
+  target that goes from one member to another and back is a different list and the member has to fetch it before it
+  renews. The longest lease an edge may hold is recorded for a member that has only targets as it is for one that has
+  devices. The edge stores a new list (the encrypted file and edge.json) and applies it, and stops the targets it no longer
+  lists, with their sessions closed (it waits up to 5 s for that), before the etag in its heartbeat moves to the new list;
+  a list it cannot store, or a session that will not close, is applied as far as it can be but not claimed: the etag in
+  its heartbeat is blank (not the previous one, so a server that goes back to that list cannot renew a list that is not
+  running) and the next check fetches the list again. When it could not store a part of it, edge.json is written with no
+  etag either, so an edge that is restarted before it succeeds fetches the whole configuration at its first check, and
+  does not renew its lease on the list the files still hold. A session that will not close does not stop the pollers from being renewed
+  by the answer: their list of devices was applied whole. The same holds for the group's VRRP key: a key file that cannot be
+  written leaves the section running but unclaimed (blank etag in the heartbeat and in edge.json), and the etag moves to a
+  list only after its VRRP section is running. A hold arrives as the time that remains and
+  the edge counts it on its own clock from the moment the configuration arrived, and remembers the end by the target's
+  name, so a link that opens and closes the fence does not start the hold again; a restart holds for the whole hold of the
+  configuration it starts with, counted from the start.
+- **Failover and return** are those of the devices: a member's targets move one grace after its last confirmation, with
+  no hold; a member that returns gets targets back after the damping time, a step at a time, each through a hold of the
+  lease of the member it is taken from. An individually assigned target (`edge:<id>`) on the same member keeps its own
+  lease and works alongside.
+- **The hold follows the device that is dialled, not the name of the setting.** A target that leaves its owner (it is
+  deleted, renamed, given another address, switched off, or moved away) is recorded in the telemetry settings
+  (`holds`, in the same compare-and-set write as the change, so every node has it and there is nothing to migrate) with
+  its address (host:port, lower case) and the time its owner may go on dialling it: one lease of the group's members (the
+  longest any holds, a member that was taken out of the group included while its lease runs), the edge's own
+  `telemetry.lease_minutes` for an edge (and not less than the hand-back hold), the hand-back hold or an hour for an owner that
+  is gone, the take-over hold for the server. A target that is created or changed afterwards with that name **or** that
+  address waits for the record, whoever owns it (the server, an edge, the same group or another): deleting a target
+  and creating the name again for the server, renaming a group target to a server one, `group:X` to `group:Y` or
+  `edge:Y` to `group:X` in one change, and giving the address to another name all wait for the former owner's
+  lease. A server target that the server runs again waits only for the server's own take-over hold, not for a hold it got
+  from a group or an edge: a target moved to the server inside the lease of the group's member (or the edge), then
+  renamed, or deleted and created again, waits for the rest of that lease, and so does one of a group that was deleted.
+  A record is dropped when it has run out, and at most 4000 are kept (the ones that end last). Addresses are compared
+  after normalising them: host in lower case without a trailing dot, an IP address in its canonical form, the port
+  without leading zeros, a bare host with the gNMI port, and `localhost`, `127.0.0.1` and `::1` as one. A name and an IP
+  address that name the same device are **not** matched: that would take a lookup, which a settings change does not
+  make. Holds on the same target set by a move are never shortened. An edit of the target during a hold does not change it. The
+  placement also holds a target for a lease when it first assigns it to a member, and keeps a released target's row (the
+  member and its hold) until the hold has passed, so one that comes back under the same name in that time returns to the
+  same member with the hold it had.
+- **Holds are counted from the moment they are worked out**, which is before the write commits: a hold cannot be stamped
+  inside the store's write. Every hold therefore carries a margin of 5 s, and the write is given no longer than that (the
+  context of the change ends then). A write the store reports as failed at the deadline might in principle still commit
+  a moment later; the hold of such a write is short by the time it took past the deadline. A hold that another node reads as an
+  absolute time is read 3 s later for the difference of the clocks of the nodes (the margin the groups ask for): in the
+  records kept in the settings (also when they are dropped), in the hold served to an edge, in the server's own wait, and
+  in the rows of the placement (a released row is dropped, and a group counts as settled, only after the margin). Deleting a
+  group (`ReleaseGroup`) is a settings write like the others: its holds carry the 5 s margin and it is given no longer than that.
+  The margins are not applied to the holds of devices.
+- **Moving a target out of a group** holds the next dialler for the longest lease a member may hold, never less than the
+  hand-back hold, whether or not the member is online (nobody can be asked); into a group it is held as a hand-over is. The
+  change is not refused for an offline member and `?force` has no part in it.
+- **Nothing is left with nobody.** A change that takes a target out of a group needs the group's lease: if the server
+  node has never been able to read the groups the change is refused (`telemetry: the edge groups could not be read`),
+  and one that has had an answer goes on with the last. Deleting a group hands its targets back to the server (`run_on` empty, held for the
+  lease), as it does the devices, before the group goes; the last member cannot leave while a target names the group. A
+  target whose group is gone anyway (a failed delete) is dialled by the server after an hour, the longest a lease can
+  be, and the status says why. With no healthy member nothing moves: the targets stay with their members, and a target
+  nobody has yet shows `unassigned_targets` in the group view. If the telemetry settings cannot be read the targets are left
+  as they are for that pass and the devices go on. The answer to a member is built from the settings as the store has
+  them at that moment, not from the copy a node keeps for a few seconds, so a node does not serve, and renew, a target that
+  another node has just taken out of the group.
+- **Status.** `GET /api/edge-groups/{id}` has `targets` and `unassigned_targets` for the group and `targets` per member;
+  the telemetry status shows `owner: "group:<id>"` and the `member`. An audit record `edge.group.move` for a batch with
+  targets has `targets` and `target_sample` besides `devices` and `sample`. An older edge (no `group-lease` capability) is
+  served no group target.
+
+#### Relay and SNMP reads through a group
+
+`POST /api/edge-groups/{id}/relay` has the contract of `POST /api/edges/{id}/relay` and `POST /api/edge-groups/{id}/snmp` (and
+`/snmp/windows`) that of the edge routes. The members that may take a request are the healthy ones, then the suspect
+ones; a member that is gone is not asked (an edge of an older release is never confirmed, so it is gone to the group and is not used).
+Among them a member the server confirmed within the last two heartbeat intervals (20 s) is asked before one it did not: a
+member whose link to the server was cut without a close keeps a control connection the server cannot tell is dead, so a
+request offered to it waits for an answer that does not come, and its confirmations stop at once. Such a request is still
+never repeated on another member (it may have been sent); the stale member is only asked last.
+
+- **Relay.** The member with the fewest relay sessions open through this node goes first (the count is of this node's
+  sessions; another node does not know them). The server asks the member through the peer mesh, from any node, as it does
+  for an edge. The next member is asked in two cases only, both of which leave nothing on the first edge: the request was
+  **proved not sent** (the edge has no control connection on any node, the connection took no more requests, or the peer
+  that holds it refused the offer), or the member is **at its limit of sessions** (`limit_exceeded`, which is said before a
+  session exists; the counts the order was made from were read before the opens of concurrent requests). A request that
+  may have been sent is not asked of another member: the control connection took it and then ended, or the call to the
+  peer failed after it may have written it. The edge's agent runs an open under its own context, so the first edge may
+  still dial the target, and a second member would open a second connection to it. The client is still told `edge_offline`
+  then. Nothing is repeated either once a session is open, or when a member answered anything else (`target_not_allowed`,
+  `write_not_allowed`, `relay_disabled`, `dial_failed`, `relay_timeout`): the answer stands, and an error of a member's
+  own (its policy, its ceiling) names the member in `error.fields.member`. With every member offline the answer is
+  `edge_offline`, with every member at its limit `limit_exceeded`. A session that loses its member ends; it is not opened
+  again on another. The audit records name the `group`, the member as `edge` and `members_tried`.
+- **SNMP reads.** The target decides the member: the members are ordered by a stable weight of the target address, so the same
+  device goes to the same member from any node, as long as the set of healthy members is the same, and the edge that gets
+  the requests counts the spacing. A member for which the request is proved not sent (the relay's rule above) is passed over. A read that may have been
+  sent is not repeated on another member (the first may have asked the device, and a second member would double the
+  client's reads), and its spacing slot is not given back. An error of the device (a timeout,
+  an SNMP error in an operation) and a refusal of the edge's policy are the answer and are not retried; an error of a
+  member's own names it in `error.fields.member`. The credential is a
+  **profile only**: a sealed credential is sealed to the key of one edge, and the group route does not know which member
+  will take the request, so `credential.sealed` is refused with `400 validation_failed`; a client whose scope names a member can
+  use that member's own route for a sealed credential.
+- **Windows and rates hold across the members.** The server keeps its own account for the group, per client and device
+  (one request per `outside_gap_secs`, or the window's `min_interval_s`), and refuses with `429 limit_exceeded` and
+  `Retry-After` before it asks any member. A failover, or a request that lands on another node's member, then does not give a
+  client a second budget. **The account is kept in memory on each node and is not shared between nodes, as the edge route's is not:** a read that
+  lands on another server node has that node's account, and the budget of a client is then one per node
+  until the edge's own account (its `outside_gap_secs`) answers. The stable choice of the member makes the edge that gets
+  the reads the same one from every node, and it keeps the spacing, but a failover or a change of the set of healthy
+  members that sends the same device to another member in the meantime also gives that member no account of the earlier
+  read. On one node, and across a failover on that node, the group's account holds. A slot is spent only by a request that reached a device (an answer or an error of
+  the device), not by one refused at the door or that found no member. A window of the group (`POST
+  /api/edge-groups/{id}/snmp/windows`, `group` in its answer) is bound to the group: it does not work on a member's route
+  and a member's window does not work on the group's. Its floor is the members' `min_window_secs`. The edge's per-device request rate
+  (`device_rate`) and the polling budget are the edge's own: a member that polls a device and another that reads it each
+  keep their own.
+- **Scope.** An integration client names a group in the `edges` list of its scope as `group:<id>`. That entry is the whole
+  grant: the group route is the way in, and the members' own routes stay closed to the client unless it also names them.
+  A scope that names every member does not name the group.
+- **Policy of the group.** The members may have different `relay` and `snmp_read` sections, and a request would behave
+  differently depending on the member it reached. The group does not carry these sections and push them to the members
+  (an edge keeps its own configuration, with its own ceiling, and the sections are per edge everywhere else); instead
+  **the group route refuses, with `409 group_policy_differs`, while the members' sections that the route uses differ in
+  what decides a request**: the relay route compares the `relay` sections and the SNMP routes the `snmp_read` sections (a
+  difference in the one does not stop the other), and the group's status says which differ. Compared, as stored: the whole
+  `relay` section (its allow-list as a set) and, of `snmp_read`, whether it is on, the allow-list (as a set) and the limits. A member whose
+  document cannot be read makes both differ. Not compared, because they belong to the host: `source_address` and
+  `poll_workers`. Every member counts, whether or not it is up, so which member takes a request never changes what the
+  request does. `GET /api/edge-groups/{id}` has `policy` (`relay` and `snmp_read`, each `consistent` or `differs`) and, per
+  member, a short digest of each section (`relay_policy`, `snmp_read_policy`; `off` for a section that does nothing), so the
+  odd one out stands out. Two limits: an edge applies a changed section at its next sync (within seconds for a member of a
+  group), and enforces the old one until then, while the group's status compares what is stored; and the edge's own ceiling
+  (`SESHAT_EDGE_RELAY_CEILING`, `SESHAT_EDGE_SNMP_CEILING`) is in its environment, which the server cannot see, so a ceiling
+  that differs between members still shows as a refusal from one of them. Set them alike.
+
+### VRRP on the edges of a group
+
+The members of a group can share one receiving address, so that devices send their syslog, traps and flows to a
+single address and a member that fails hands it to another within seconds. The server pushes the configuration to the
+members; the members run the same VRRPv3 engine as the server's HA ([`ha.md`](ha.md)) between themselves, on their own
+network segment. Nothing about it travels to the server except the status in the heartbeat, and the edges stay
+outbound-only toward the server.
+
+**What it needs.** The members on one layer-2 segment that forwards multicast `224.0.0.18` (IP protocol 112), a free
+address in the segment's subnet, `CAP_NET_ADMIN` and `CAP_NET_RAW` in each member's effective capability set
+([Capabilities](#vrrp-capabilities)), and members that send the `vrrp` capability (this release of the edge; an older
+edge is served no VRRP section and reports none). A group without a VRRP configuration, and an edge in no group, run
+no VRRP and are unchanged.
+
+**Configuring it.** `PUT /api/edge-groups/{id}/vrrp` replaces the group's whole VRRP configuration (admin), `GET` reads it
+with the status, `DELETE` removes it and the members release the address. Every change is audited
+(`edge.group.vrrp.update`, `.delete`; the key is in no record). The members apply a change at their next heartbeat
+(10 s) without restarting their pipeline.
+
+```json
+{
+  "instances": [
+    {
+      "name": "syslog",
+      "vrid": 51,
+      "vips": ["192.0.2.10"],
+      "priorities": { "edge-a": 120, "edge-b": 100, "edge-c": 80 },
+      "preempt_delay_ms": 30000
+    }
+  ],
+  "health": { "link_down_secs": 30, "link_down_penalty": 40, "queue_age_secs": 300, "queue_age_penalty": 20, "listener_penalty": 60 }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `instances` | 1 to 8 virtual routers. One is active/standby (mode 1). Several, each with a different best member, are multi-address active/active (mode 2): split the devices between the addresses, as in [`ha.md`](ha.md#mode-2-multi-vip-activeactive). |
+| `name`, `vrid` | A label, and the VRID 1 to 255: unique in the group, and not used by another group of the same site and VRF (the advertisements of a VRID reach every router on the segment). |
+| `vips` | 1 to 8 usable unicast addresses of one family: not unspecified, loopback, link-local, multicast, broadcast (255.255.255.255) or reserved (0.0.0.0/8, 240.0.0.0/4). Not an address another group of the same site and VRF holds. |
+| `interface`, `interfaces` | The interface name on the members; empty is the interface whose directly connected subnet holds the first address (right for nearly everyone). `interfaces` overrides it for single members, keyed by edge id. A member refuses (`fault`) an address its interface has no connected subnet for. |
+| `priorities`, `default_priority` | Base priority 1 to 254 per edge, keyed by edge id: a member, or any edge of the group's site and VRF (set the priority of an edge before it joins and joining does not break the configuration); a member not listed has `default_priority` (100). |
+| `preempt` (default true), `preempt_delay_ms` (default 30000) | A higher-priority member takes the address back, and a backup takes it from a master whose priority has dropped (health-driven failover needs it). The delay is how long a backup tolerates a lower-priority master that is still advertising first. With the link-down penalty on it must be at least 15000: see the next section. |
+| `advert_interval_ms` | 100 to 40950 in steps of 10; default 1000. A backup takes over after three intervals plus a skew when it hears nothing (3.2 to 4 s at the default). |
+| `health` | The penalties, in priority points; 0 turns a signal off. Below. |
+
+The server refuses what cannot work, naming the field: a VRID or an address another group of the same site and VRF uses, a
+priority or interface for an edge that is not of the group's site and VRF, an address that is not a usable
+unicast one, mixed families, and penalties that cannot do their job (below), also when a member joins (a join that would
+leave the configuration unable to work is a `409 vrrp_unworkable` whose message names the fix). The group's site and VRF are the segment's
+identity as far as the server knows: it has no list of the subnets of a site, so whether an address is in the members'
+subnet is decided on each member, which refuses an address its interface has no connected subnet for and says so in its
+status.
+
+**The key.** The first save makes a random 32-byte key for the group, seals it with the server's secret key and keeps it
+until the configuration is deleted or the key is rotated ([Rotating the key](#rotating-the-key); saving again does not change
+it). Advertisements are signed with an HMAC keyed from it,
+so another host on the segment cannot take the address or knock it over; as in [`ha.md`](ha.md), the signature is not
+bound to a counter and VRRP belongs on a segment you control. The key is the group's own: it is not the server's cluster
+secret, nothing derives it from that, and it is served only to the members of that group, in the configuration the
+edge fetches over its authenticated connection. It is in no API response and no audit record (`auth_key_set` says it
+exists). On the edge it is kept in `vrrp-key.enc` ([What an edge keeps on disk](#what-an-edge-keeps-on-disk)).
+
+#### Rotating the key
+
+`POST /api/edge-groups/{id}/vrrp/rotate-key` (admin, audited as `edge.group.vrrp.rotate_key`) makes a new key. The server
+also rotates it by itself, audited as the system's, when a member is removed from the group and when an edge that is in the
+group is deleted (revoked) or has its credentials rotated: the edge that left may be offline and keep the key it had, and
+the key it holds must stop being the group's. An edge that is no longer a member is also served no VRRP section, and
+deletes its key and stops its instances when it hears the server.
+
+A new key is introduced in two steps so that the address does not move. The server serves the section with both keys. For
+the first 60 s the members fetch the new key (at their next heartbeat, at most 10 s) and sign with the **old** one; every
+advertisement carries one signature and a member accepts either key. Then, for another 60 s, they sign with the new
+key and still accept the old one. After two minutes only the new key is served. A key change on a running instance does not
+restart it, so no address is released. Rotations after the first are refused (`409 rotation_in_progress`) while one is being
+taken up, except the automatic one after a member left.
+
+An edge the server refuses on every request, at least three times over 30 s with no answer in between (it was revoked or
+deleted, or its credentials rotated), stops its instances, releases the address, deletes its key file and takes the
+section out of `edge.json`, and goes on receiving and buffering. One refusal, or a few in a row for a moment (a proxy, a
+restart), does not: an edge that lost VRRP over that would drop the address of its group.
+
+The limits, stated plainly:
+
+- A member must reach the server within the two minutes. One that cannot (it is cut off from the server but on the segment)
+  keeps the old key, is not heard once the old key is no longer accepted by the others, and, hearing nobody it can trust,
+  claims the address itself: two holders until it reaches the server. The same happens to a member that was removed
+  while offline and is still running: after a rotation it is no longer part of the election, and if it is still on the
+  segment it will hold the address too until it hears the server (which tells it to stop). Take such an edge off the segment,
+  or stop it, before it matters.
+- Rotating while members are cut off from the server is best avoided; the group status shows `key_rotated_at`.
+- The server nodes each cache the section for up to 3 s, so a change made on one node may reach members through
+  another a moment later.
+
+**While the server is unreachable.** VRRP does not depend on the link: it uses the last configuration, kept on disk, and a
+restarted member does too. A change takes effect only when the server can be reached.
+
+**Health penalties.** Every 2 s the member looks at itself and subtracts a penalty from each of its priorities (never below 1);
+the lower value is advertised at once, so a healthy peer with a higher priority takes the address after the preempt
+delay. A signal counts after failing 2 probes in a row (the link signal at once, it is a duration already) and clears
+after 3 good ones.
+
+| Signal | Counts as failing when | Default penalty |
+|---|---|---|
+| `server_link` | the server has answered nothing (heartbeat, configuration check, stream acknowledgement) for `link_down_secs` (default 30) | 40 |
+| `queue_age` | the oldest event in the upstream disk queue is older than `queue_age_secs` (default 300) **while the server link is up** (a queue that grows because the server is away is the link's doing and is not counted twice) | 20 |
+| `listeners` | an input listener (traps, syslog, flows, telemetry dial-out) is not bound, or the pipeline is not running | 60 |
+
+A member that lost the server can still receive and buffer, but it is penalised, and a healthy peer takes the address.
+The server enforces what makes that work: `link_down_penalty` must be larger than the gap between the two highest
+priorities of each instance (otherwise a master cut off from the server keeps the address) and lower than every member's
+priority and than `default_priority` (otherwise the penalty alone takes members to the floor, where they tie). With 120, 100
+and 80 the default 40 satisfies both. It checks this on every save (the priorities of the members and of the edges that
+have been given one count) and whenever a member joins; removing a member is never refused, so an operator with a dead member
+can always take it out, and a configuration that no longer works with the members left shows in the VRRP status as a warning.
+
+The other penalties are not enforced, because they are advice about what the operator wants: `listener_penalty` and
+`queue_age_penalty` move the address only if they exceed the gap between the two highest priorities (with 120 and 100 a
+listener penalty of 60 does, with 200 and 100 it does not, and a master whose listeners are down keeps the address), and
+the penalties together can take a member to priority 1 (when they reach its priority), where members tie. The VRRP status
+(`warnings`) says so for the configuration as it stands. The default penalties 40, 20 and 60 add up to 120, so they
+raise the second warning for members with priorities under 120: use priorities above that, or lower the penalties.
+
+**If every member lost the server.** All are penalised by the same amount, so the order of their priorities is unchanged and the
+current holder keeps the address: receiving and buffering carry on at one member. The members may cross the
+threshold a few seconds apart (their last contacts differ by up to one heartbeat), and for that interval one has the penalty and
+the others not. This is what the preempt delay is for: a backup that preempts sooner would take the address from a master that
+is about to be penalised just as much, and give it back. The delay is honoured exactly (a backup that hears a lower-priority
+master keeps its master-down timer running from every advertisement, so the delay, not the master-down interval, decides),
+and the server will not accept one under 15 s while the link-down penalty is on. When the link returns, a penalty clears
+only after 3 good probes and the member then gets the address back after the delay; the edge reports every transition, with
+its reason, in the group view.
+
+**Failover times.** A holder that stops cleanly (SIGTERM, `docker stop`, systemd stop) releases the address first and sends a
+priority 0 advertisement, so a backup takes it within the skew time (about 0.6 s at the defaults); a holder that dies or is cut
+off from the segment is replaced after three advertisement intervals plus the skew (3.2 to 4 s). A penalised holder is
+replaced after the penalty is in force plus the preempt delay. The new holder announces the address with gratuitous ARP
+(IPv4) or an unsolicited neighbour advertisement (IPv6), three times. A hard kill on a host network leaves the address on
+the interface until the edge starts again; see the drop-in below.
+
+#### The edge-local ceiling for VRRP
+
+The addresses come from the server, so by themselves they protect against nothing if the server is compromised or
+misconfigured. An edge's own operator can bound them in the edge's environment, in something the server does not send:
+
+| Variable | Meaning |
+|---|---|
+| `SESHAT_EDGE_VRRP_CEILING` | Comma-separated CIDRs or addresses (or `none`): the only addresses the edge will hold. |
+| `SESHAT_EDGE_VRRP_CEILING_FILE` | The same, one entry per line (`#` comments), read at start. |
+
+A virtual address outside the ceiling is refused on the edge: the instance is not started, the address is never
+programmed, the member reports it as `refused` with the reason (status page, `/api/status`, the group view,
+`seshat_edge_vrrp_refused`), and the instance's other addresses are not claimed either. `none` forbids VRRP on the edge (`none` together with addresses is a mistake and an
+error). With no ceiling the edge follows the pushed configuration and logs a warning when VRRP is configured that way (the status page says
+so). A ceiling that cannot be parsed, a ceiling file that cannot be read, and a ceiling file that holds no entry (empty or only
+comments, a truncated write) keep VRRP off (the edge starts and does everything else) and say why.
+
+#### VRRP capabilities
+
+VRRP needs `CAP_NET_ADMIN` (the address) and `CAP_NET_RAW` (protocol 112 and gratuitous ARP) in the process's effective set;
+the default unit and the default image grant neither, and the default is not widened. Without them the edge starts, receives,
+buffers and delivers as usual, logs the missing capabilities once, and reports `unavailable` with the capability names in its
+status and in the group view; it retries every 5 s, so granting them needs no new configuration.
+
+- systemd: the drop-in [`deploy/systemd/drop-ins/edge-vrrp.conf`](../deploy/systemd/drop-ins/edge-vrrp.conf) (installed with
+  the `seshat-edge` package as `/usr/share/seshat-edge/systemd/drop-ins/edge-vrrp.conf`) adds both capabilities to the ambient
+  and bounding sets and `AF_NETLINK` and `AF_PACKET` to the unit's address families (the edge unit allows neither). It carries
+  a commented `ExecStopPost=` line that removes the address after a kill.
+
+  ```
+  install -D -m 0644 /usr/share/seshat-edge/systemd/drop-ins/edge-vrrp.conf /etc/systemd/system/seshat-edge.service.d/edge-vrrp.conf
+  systemctl daemon-reload && systemctl restart seshat-edge
+  ```
+
+- Docker: run as root on the host network with the two capabilities added, as in
+  [`deploy/compose/edge-vrrp.example.yaml`](../deploy/compose/edge-vrrp.example.yaml) (`network_mode: host`, `user: "0:0"`,
+  `cap_add: [NET_ADMIN, NET_RAW, ...]`). Without host networking the address would be programmed onto the container's own
+  interface, where nothing outside can reach it.
+
+#### VRRP status and metrics
+
+`GET /api/edge-groups/{id}` and `GET /api/edge-groups/{id}/vrrp` show, per instance, the holder (the member that reports itself
+master within the last 25 s; `conflict` when more than one does), and for each member its state (`master`, `backup`, `init`,
+`fault`, `refused`, or `unknown` when it has not reported lately or is an edge of a release that does not report VRRP), its
+base and effective priority, its interface, the time of its last transition with a reason code (`started`, `master_down`,
+`preempt`, `peer`, `health`, `released`, `fault`) and the engine's own words for it, and, for the member as a whole, whether
+VRRP runs (`running`, `partial`, `unavailable` with the detail such as missing capabilities), whether it has a ceiling and
+the penalties in force. Members send their report in every heartbeat, at once when an instance changes state, and once more when they stop, so
+the view follows a move within about a second of the move. A holder that dies without stopping (a kill, a power loss)
+still shows as master until its last report is 25 s old, and `conflict` shows for that time beside the new holder.
+
+| Metric | Where | Meaning |
+|---|---|---|
+| `seshat_edge_group_vip_holder{group,instance,edge}` | server | 1 for the member that reports itself master, 0 for the others |
+| `seshat_edge_group_failovers_total{reason}` | server | gains `vip_master_down`, `vip_preempt`, `vip_started`, `vip_other`: the times a member took over an address |
+| `seshat_edge_vrrp_state{instance,vrid}` | edge | 0 init, 1 backup, 2 master |
+| `seshat_edge_vrrp_priority`, `_base_priority` | edge | the priority advertised now and the configured one |
+| `seshat_edge_vrrp_transitions_total`, `_advertisements_total{direction}`, `_dropped_total{reason}` | edge | as the server's `seshat_vrrp_*` |
+| `seshat_edge_vrrp_health_penalty{signal}` | edge | the priority points each signal costs now |
+| `seshat_edge_vrrp_available`, `seshat_edge_vrrp_refused{instance}` | edge | whether VRRP can run here, and whether this instance is refused |
+
+**Upgrading.** Upgrade the servers first, then the edges. A server that has this feature serves an edge that does not send the
+`vrrp` capability no VRRP section, so an older member keeps working and takes no part in the election: give such a
+group's address to members that all run this release. An edge of this release on an older server receives no VRRP section and runs none.
+
+**Limits of this release.** VRRP is IPv4 or IPv6 per instance, with no virtual MAC (as in [`ha.md`](ha.md#what-differs-from-rfc-5798-and-why)). Changing the key
+(delete and save) is a short split of the group, so do it when a brief second master matters least.
 
 ## Footprint
 
@@ -989,3 +1784,18 @@ Target from the specification: under 100 MB.
 SNMPv3 trap users and TLS syslog listeners are not distributed to edges (the SNMP polling profiles are, but only to an edge that has the [SNMP reads](#snmp-reads) switched on or [polls devices](#polling-on-the-edge)); the Edges drawer edits the SNMP and syslog listeners but the `flow` block is API/JSON only; a changed packs set or
 configuration restarts the pipeline instead of reloading it; one batch in flight per edge (the measurement above kept up
 with 9,000 events/s; the ceiling was not measured).
+
+Edge HA ([the chapter](#edge-ha)):
+
+- The trade-offs of the chapter stand: a server outage longer than the lease stops polling and dial-in, health is the server's
+  confirmation only, two holders of the address are possible when the segment splits or a member misses a key rotation, sealed
+  SNMP credentials do not work on a group, the SNMP spacing gate is per server node, SQLite nodes with peers are refused.
+- The members of a group do not copy their `relay`, `snmp_read`, listener or telemetry sections from the group: set them alike on
+  each member. The group's relay and SNMP routes refuse requests while the first two differ.
+- A group belongs to one site and VRF, and a member to one group. A VRRP instance is IPv4 or IPv6 and has no virtual MAC.
+- The group view and its changes are on the Edges page and in the API; changes are for administrators. Viewers and operators read.
+- Measured: the moves of the shared address (above). Not timed on a live group: the moves of devices and targets, which the
+  tests check with shortened timing. Not tested: two server nodes with a leader change in the middle of a placement pass, clock
+  skew between server nodes beyond the 3 s margin, VRRP on a physical switch, IPv6 on the edge, and a group relay session whose
+  data legs reach a server node other than the one that holds it.
+- Changing the key by deleting and saving the VRRP configuration is a short split of the group: rotate it instead.

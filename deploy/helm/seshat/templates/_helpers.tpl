@@ -94,6 +94,20 @@ app.kubernetes.io/component: {{ index . 1 }}
 {{- if lt (int .Values.terminationGracePeriodSeconds) (add (int .Values.drain.timeoutSeconds) (int .Values.drain.holdSeconds) 20) -}}
 {{- fail (printf "terminationGracePeriodSeconds (%d) must cover drain.timeoutSeconds + drain.holdSeconds + 20 s of shutdown (%d)" (int .Values.terminationGracePeriodSeconds) (add (int .Values.drain.timeoutSeconds) (int .Values.drain.holdSeconds) 20)) -}}
 {{- end -}}
+{{- if .Values.cluster.enabled -}}
+{{- if not .Values.cluster.secret.existingSecret -}}
+{{- fail "cluster.enabled needs cluster.secret.existingSecret (a Secret with at least 16 characters under cluster.secret.key). The chart never creates or stores secrets." -}}
+{{- end -}}
+{{- if .Values.roles.split -}}
+{{- fail "cluster.enabled does not work with roles.split=true: the console pods take the edge and API traffic, and a Deployment has no per-pod DNS names. Use roles.split=false, or console.replicaCount=1 without cluster.enabled." -}}
+{{- end -}}
+{{- if and (not .Values.cluster.peers) (not .Values.cluster.allowPlainRelay) -}}
+{{- fail "cluster.allowPlainRelay=false refuses the generated http:// peer URLs for the edge relay. Keep it on, or list https:// URLs in cluster.peers." -}}
+{{- end -}}
+{{- if and .Values.cluster.networkPolicy.enabled .Values.intake.hostNetwork.enabled -}}
+{{- fail "cluster.networkPolicy.enabled has no effect with intake.hostNetwork.enabled: NetworkPolicy does not apply to host-network pods." -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.portal.enabled -}}
 {{- $m := .Values.portal.mode -}}
 {{- if not (has $m (list "shared" "push" "api" "db")) -}}
@@ -154,6 +168,11 @@ runAsGroup: 65532
 fsGroup: 65532
 seccompProfile:
   type: RuntimeDefault
+{{- with .Values.tracker.pingGroupRange }}
+sysctls:
+  - name: net.ipv4.ping_group_range
+    value: {{ . | quote }}
+{{- end }}
 {{- end -}}
 
 {{- define "seshat.containerSecurityContext" -}}
@@ -256,6 +275,43 @@ capabilities:
 {{- end -}}
 
 {{/* Listener environment for pods that terminate telemetry. */}}
+{{/* Base URL of one pod name (or a $(VAR) that expands to it) by the StatefulSet's headless DNS: call with (list . "<pod>") */}}
+{{- define "seshat.podURL" -}}
+{{- $root := index . 0 -}}
+{{- printf "http://%s.%s-headless.%s.svc:%d" (index . 1) (include "seshat.fullname" $root) $root.Release.Namespace (int $root.Values.ui.containerPort) -}}
+{{- end -}}
+
+{{/* cluster.peers, or every replica by its headless DNS name. */}}
+{{- define "seshat.clusterPeers" -}}
+{{- $urls := .Values.cluster.peers -}}
+{{- if not $urls -}}
+{{- $root := . -}}
+{{- range $i := until (int .Values.replicaCount) -}}
+{{- $urls = append $urls (include "seshat.podURL" (list $root (printf "%s-%d" (include "seshat.fullname" $root) $i))) -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $urls -}}
+{{- end -}}
+
+{{/* The peer protocol of a collector pod. Goes after seshat.env: $(SESHAT_INSTANCE) must already be defined. */}}
+{{- define "seshat.clusterEnv" -}}
+{{- if .Values.cluster.enabled }}
+- name: SESHAT_CLUSTER_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.cluster.secret.existingSecret }}
+      key: {{ .Values.cluster.secret.key }}
+- name: SESHAT_CLUSTER_PEERS
+  value: {{ include "seshat.clusterPeers" . | quote }}
+- name: SESHAT_CLUSTER_ADVERTISE
+  value: {{ include "seshat.podURL" (list . "$(SESHAT_INSTANCE)") | quote }}
+{{- if .Values.cluster.allowPlainRelay }}
+- name: SESHAT_CLUSTER_ALLOW_PLAIN_RELAY
+  value: "1"
+{{- end }}
+{{- end }}
+{{- end -}}
+
 {{- define "seshat.listenerEnv" -}}
 {{- range $p := include "seshat.intakePorts" . | fromJsonArray }}
 {{- if $p.on }}

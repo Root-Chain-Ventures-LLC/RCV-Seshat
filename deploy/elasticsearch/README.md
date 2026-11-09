@@ -13,6 +13,7 @@ Data-stream templates for the common schema in [`docs/schema`](../../docs/schema
 | `index-template-seshat-flow.json` | `seshat-flow` for `logs-seshat.flow-*` (3 primary shards) |
 | `index-template-seshat-flow-rollup.json` | `seshat-flow-rollup` for `logs-seshat.flow_rollup-*` |
 | `index-template-seshat-tracker.json` | `seshat-tracker` for `logs-seshat.tracker-*` |
+| `index-template-seshat-reachability.json` | `seshat-reachability` for `logs-seshat.reachability-*` |
 | `index-template-seshat-device.json` | `seshat-device` for `logs-seshat.device-*` |
 | `index-template-seshat-passthrough.json` | `seshat-passthrough` for `logs-seshat.passthrough-*` (the original messages of inputs with passthrough on; `event.original` is searchable text) |
 

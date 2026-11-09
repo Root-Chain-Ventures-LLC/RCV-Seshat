@@ -7,6 +7,8 @@ CSV, HTTP, DNS) and delivers the result to any number of destinations at once (L
 Elasticsearch/OpenSearch, Kafka, Splunk, an existing NMS, files). It also keeps a read-only **Device Tracker**:
 look up a MAC address, IP address, hostname or user and see what the device is, where it is, where it has been,
 and how old every fact is.
+It also checks that each tracked device is up (an ICMP echo and an SNMP uptime read), with metric
+samples and one event per state change for your alerting.
 
 Each input can also ship a **passthrough stream** beside the enriched one: the original message, untouched, as fast
 as it arrives, joined to its enriched events by an id. The **event inspector** in the console shows a message's
@@ -22,7 +24,9 @@ An **edge collector** (`seshat-edge`) forwards a remote site's traps, syslog and
 an outbound connection. When an administrator turns it on, an edge can also carry an authorised application's
 TCP session to an allow-listed host on its network, run on-demand SNMP reads there, poll the site's Device
 Tracker devices, or collect streaming telemetry (gNMI and JTI dial-in, Cisco MDT, Juniper and gNMI dial-out) from
-inside it, without the remote site accepting any inbound connection.
+inside it, without the remote site accepting any inbound connection. Two or three edges of one site can form a
+group that shares one receiving address and takes over each other's polling, telemetry targets and relay when one
+stops (`docs/edge.md`, "Edge HA").
 
 **Integrations**: other applications connect as registered integration clients whose tokens carry only the
 capabilities they need (Device Tracker reads, bulk reads, event subscriptions with replay, edge relay, edge SNMP
