@@ -8,7 +8,7 @@ templates match `logs-seshat.<dataset>-*`.
 |---|---|
 | `ism-seshat-logs.json` | ISM policy `seshat-logs` (example: rollover at 1 d or 50 GB, force-merge at 7 d, delete at 90 d); attaches itself to `logs-seshat.*` through `ism_template` |
 | `component-template-seshat-core.json` | Component template `seshat-core` |
-| `index-template-seshat-{trap,syslog,flow,flow-rollup,tracker,device,reachability,passthrough}.json` | Index templates `seshat-trap`, `seshat-syslog`, `seshat-flow`, `seshat-flow-rollup`, `seshat-tracker`, `seshat-device`, `seshat-reachability`, `seshat-passthrough` |
+| `index-template-seshat-{trap,syslog,flow,flow-rollup,tracker,device,reachability,alert,passthrough}.json` | Index templates `seshat-trap`, `seshat-syslog`, `seshat-flow`, `seshat-flow-rollup`, `seshat-tracker`, `seshat-device`, `seshat-reachability`, `seshat-alert`, `seshat-passthrough` |
 
 Status: these files were accepted by an OpenSearch **2.18.0** cluster and exercised with the six
 example documents (documents created in the six data streams; `nested`, `flat_object`, `ip` and

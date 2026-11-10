@@ -1,0 +1,85 @@
+{
+  "index_patterns": [
+    "logs-seshat.alert-*"
+  ],
+  "data_stream": {},
+  "priority": 200,
+  "version": 1,
+  "composed_of": [
+    "seshat-core"
+  ],
+  "_meta": {
+    "managed_by": "seshat",
+    "seshat_schema_version": "1.0",
+    "ecs_version": "8.11.0",
+    "description": "Seshat seshat.alert data streams: lifecycle events of the built-in alert engine: an alert fired, was acknowledged, resolved or closed."
+  },
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": 1,
+        "number_of_replicas": 1
+      }
+    },
+    "mappings": {
+      "properties": {
+        "seshat": {
+          "dynamic": false,
+          "properties": {
+            "alert": {
+              "properties": {
+                "id": {
+                  "type": "long"
+                },
+                "rule": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "status": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "severity": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "title": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "summary": {
+                  "type": "text"
+                },
+                "fingerprint": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "occurrences": {
+                  "type": "long"
+                },
+                "starts_at": {
+                  "type": "date"
+                },
+                "ends_at": {
+                  "type": "date"
+                },
+                "suppressed": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "ack_by": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "interface": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

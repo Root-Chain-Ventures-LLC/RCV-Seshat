@@ -29,7 +29,7 @@ name: seshat-edge-vrrp
 
 services:
   seshat-edge:
-    image: ${SESHAT_IMAGE:-ghcr.io/root-chain-ventures-llc/seshat:0.7.0}
+    image: ${SESHAT_IMAGE:-ghcr.io/root-chain-ventures-llc/seshat:0.8.0}
     restart: unless-stopped
     network_mode: host
     user: "0:0"

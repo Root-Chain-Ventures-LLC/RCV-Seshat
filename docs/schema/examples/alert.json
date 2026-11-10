@@ -1,0 +1,43 @@
+{
+  "@timestamp": "2026-10-12T14:05:31.200Z",
+  "ecs": { "version": "8.11.0" },
+  "data_stream": { "type": "logs", "dataset": "seshat.alert", "namespace": "exo" },
+  "event": {
+    "kind": "alert",
+    "category": ["network"],
+    "type": ["info"],
+    "action": "alert-fired",
+    "dataset": "seshat.alert",
+    "module": "seshat",
+    "id": "01K7XEXAMPLE0ALERT00000001",
+    "created": "2026-10-12T14:05:31.200Z",
+    "severity": 3
+  },
+  "observer": {
+    "vendor": "Example Org",
+    "product": "Seshat",
+    "version": "0.1.0",
+    "name": "collector-1.example.com",
+    "type": "gateway"
+  },
+  "message": "fired: Interface down: switch3.example.com GigabitEthernet1/0/14",
+  "host": { "name": "switch3.example.com" },
+  "seshat": {
+    "schema_version": "1.0",
+    "source": { "listener": "alerting", "input": "engine", "site": "example-site-a" },
+    "device": { "status": "known", "id": "dev-0003", "name": "switch3.example.com", "site": "example-site-a", "role": "access-switch" },
+    "enrichment": { "level": "none" },
+    "alert": {
+      "id": 412,
+      "rule": "Interface down",
+      "status": "firing",
+      "severity": "major",
+      "title": "Interface down: switch3.example.com GigabitEthernet1/0/14",
+      "summary": "IF-MIB::linkDown ifIndex.10114=10114 ifOperStatus.10114=down",
+      "fingerprint": "9f2c41d07aa31b5c8e10",
+      "occurrences": 1,
+      "starts_at": "2026-10-12T14:05:30Z",
+      "interface": "GigabitEthernet1/0/14"
+    }
+  }
+}

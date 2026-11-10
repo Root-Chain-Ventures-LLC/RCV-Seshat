@@ -70,7 +70,9 @@ every sample of every subscription. `seshat.metric.labels.<key>` reads one label
 `neighbor`, ...; the label names are in the event's `seshat.metric.labels`, they have no dots). A metric
 field of an event that is not a sample is unset, so `==`, `^=`, `=~` and `in` do not match it and `!=`, `!~` and
 `not in` do (a regular expression that matches the empty string, such as `.*`, therefore matches those events
-too; anchor it or add `event.dataset == "seshat.metric"`). Prefix and glob matching on the path use the
+too; anchor it or add `event.dataset == "seshat.metric"`). `seshat.metric.path` is the path exactly as the collector sent it: with a leading slash and the list keys
+(`/interfaces/interface[name=Ethernet1/1]/state/oper-status`), so `==` on a path without keys never matches; use `^=` and `=~`. (The alert
+engine and the metric store match on the key-free path instead.) Prefix and glob matching on the path use the
 existing `^=` and `=~`:
 
 ```

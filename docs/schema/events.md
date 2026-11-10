@@ -6,7 +6,7 @@ capability: the envelope, the event kinds, the `data` block, how to receive even
 by pulling a replay cursor), and what a consumer can rely on. It follows the rules of every contract: an
 additive change keeps the version, and a consumer must ignore keys it does not know.
 
-The events are the ones Seshat already produces: tracker events and interface link events. Nothing here
+The events are the ones Seshat already produces: tracker events, interface link events and the alerts of its built-in alert engine. Nothing here
 describes a way to act on a device.
 
 ## Envelope
@@ -56,6 +56,8 @@ Every kind is produced by something Seshat already emits; none exists only for i
 | `tracker.watch` | Device Tracker, `seshat.tracker` `watch.hit` | as above | A watch-list entry matched. `seshat.tracker.watch` carries the entry's `id` and `kind`; its `value`, `label` and the `reason` (`appeared`, `moved`, `seen`) are operator-written and are removed from what clients receive (pull and webhook): only an administrator's read of the log has them. The tracker's own quiet period (ten minutes per entry, MAC and reason) applies. |
 | `link.up` | traps (`seshat.trap`, IF-MIB `linkUp`, `event.action` `interface-up`) and syslog (`event.action` `interface-up`) | the device's site and tenant from the inventory; for a device not in the inventory, the site of the input that received the message, and no tenant | An interface came up: an IF-MIB `linkUp` trap (notification `1.3.6.1.6.3.1.1.5.4`), or a vendor syslog message that a pack maps to `interface-up`. |
 | `link.down` | traps (`seshat.trap`, IF-MIB `linkDown`, `event.action` `interface-down`) and syslog (`event.action` `interface-down`) | as above | An interface went down (`linkDown`, notification `1.3.6.1.6.3.1.1.5.3`, or syslog mapped to `interface-down`). |
+| `alert.firing` | the built-in alert engine (`seshat.alert`, Alerting) | the alert's device site and tenant | An alert fired: a rule's condition started to hold for an identity. `data.seshat.alert` carries `id`, `rule`, `status`, `severity`, `title`, `summary`, `fingerprint`, `occurrences`, `starts_at` and the interface when there is one; `seshat.device` the device. |
+| `alert.resolved` | as above | as above | An alert ended: its condition cleared, it timed out, or an operator closed it. Same `data`, with `status` `resolved`. |
 
 Not offered as kinds: interval closes and extensions, `unknown.appeared`, and `interface-admin-down`. A
 new kind is an additive change.

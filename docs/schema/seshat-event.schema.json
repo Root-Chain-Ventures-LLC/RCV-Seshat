@@ -30,6 +30,7 @@
             "seshat.device",
             "seshat.metric",
             "seshat.reachability",
+            "seshat.alert",
             "seshat.passthrough"
           ]
         }
@@ -223,6 +224,28 @@
       },
       "then": {
         "$ref": "#/$defs/dataset_reachability"
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "event"
+        ],
+        "properties": {
+          "event": {
+            "required": [
+              "dataset"
+            ],
+            "properties": {
+              "dataset": {
+                "const": "seshat.alert"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/dataset_alert"
       }
     },
     {
@@ -3947,6 +3970,355 @@
         "seshat"
       ],
       "$comment": "seshat.reachability: device reachability state changes (down, up, restarted) from the Device Tracker's ICMP and SNMP probes."
+    },
+    "dataset_alert": {
+      "type": "object",
+      "properties": {
+        "@timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ecs": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "const": "8.11.0"
+            }
+          },
+          "required": [
+            "version"
+          ]
+        },
+        "data_stream": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "logs"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.alert"
+            },
+            "namespace": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$",
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "type",
+            "dataset",
+            "namespace"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "labels": {
+          "type": "object"
+        },
+        "event": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "event",
+                "metric",
+                "state"
+              ]
+            },
+            "category": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "action": {
+              "type": "string"
+            },
+            "dataset": {
+              "type": "string",
+              "const": "seshat.alert"
+            },
+            "module": {
+              "type": "string",
+              "const": "seshat"
+            },
+            "id": {
+              "type": "string"
+            },
+            "created": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "ingested": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "severity": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 7
+            }
+          },
+          "required": [
+            "kind",
+            "category",
+            "dataset",
+            "module",
+            "id",
+            "created"
+          ]
+        },
+        "observer": {
+          "type": "object",
+          "properties": {
+            "vendor": {
+              "type": "string"
+            },
+            "product": {
+              "type": "string",
+              "const": "Seshat"
+            },
+            "version": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "gateway"
+              ]
+            },
+            "ip": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "anyOf": [
+                  {
+                    "format": "ipv4"
+                  },
+                  {
+                    "format": "ipv6"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "vendor",
+            "product",
+            "version"
+          ]
+        },
+        "host": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        "seshat": {
+          "type": "object",
+          "properties": {
+            "schema_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+$"
+            },
+            "source": {
+              "type": "object",
+              "properties": {
+                "listener": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "string",
+                  "enum": [
+                    "snmp",
+                    "syslog",
+                    "flow",
+                    "poller",
+                    "edge",
+                    "telemetry"
+                  ]
+                },
+                "site": {
+                  "type": "string"
+                },
+                "vrf": {
+                  "type": "string"
+                },
+                "edge": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "device": {
+              "$ref": "#/$defs/shared_seshat_device"
+            },
+            "enrichment": {
+              "type": "object",
+              "properties": {
+                "level": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "partial",
+                    "full"
+                  ]
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "kb_observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "backfilled": {
+                  "type": "boolean"
+                },
+                "fields": {
+                  "type": "object"
+                },
+                "origins": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              },
+              "required": [
+                "level"
+              ],
+              "additionalProperties": false
+            },
+            "route": {
+              "type": "object",
+              "properties": {
+                "matched": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "destinations": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "alert": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer"
+                },
+                "rule": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "firing",
+                    "acknowledged",
+                    "resolved"
+                  ]
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "critical",
+                    "major",
+                    "minor",
+                    "warning",
+                    "info"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "fingerprint": {
+                  "type": "string"
+                },
+                "occurrences": {
+                  "type": "integer"
+                },
+                "starts_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "ends_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "suppressed": {
+                  "type": "string"
+                },
+                "ack_by": {
+                  "type": "string"
+                },
+                "interface": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "rule",
+                "status",
+                "severity",
+                "title",
+                "fingerprint",
+                "occurrences"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "schema_version",
+            "device",
+            "enrichment",
+            "alert"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "@timestamp",
+        "ecs",
+        "data_stream",
+        "event",
+        "observer",
+        "seshat"
+      ],
+      "$comment": "seshat.alert: lifecycle events of the built-in alert engine: an alert fired, was acknowledged, resolved or closed."
     },
     "dataset_passthrough": {
       "type": "object",

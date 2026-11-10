@@ -264,7 +264,7 @@ state change is announced once: the node that sees it writes it to the row of th
 sequence number and emits the event only if that write wins, so two replicas that see the same change, or a restart that
 sees it again, do not both announce it; when the write fails nothing is announced and the change is found again by the
 next probe. A result that is not newer than the last from the same poller (or is older than the last from any) is dropped.
-Seshat does not evaluate thresholds or run alerts: what to do about a state change is for the routes and the systems they feed.
+Routing these events to a downstream alerting system keeps working. Seshat also has a built-in alert engine, off until rules are enabled, with a starter rule for `device-down` and `device-up`; it is additional, not a replacement for the routes.
 
 **Samples**, one `seshat.metric` event per measurement of every probe, in the shape the
 [metric destinations](outputs.md) read, so Prometheus remote write, InfluxDB and OTLP take them unchanged
