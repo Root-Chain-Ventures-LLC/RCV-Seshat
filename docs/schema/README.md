@@ -52,7 +52,7 @@ the Device Tracker portal are built against it.
 | `seshat.device` | state | device knowledge-base records | `logs-seshat.device-exo` |
 | `seshat.metric` | metric | streaming-telemetry samples (gNMI, Cisco MDT, Juniper JTI, Dell OS10) | `logs-seshat.metric-exo` |
 | `seshat.reachability` | event | Device Tracker reachability changes: a tracked device went down, came back up or restarted ([Device Tracker, Reachability](../device-tracker.md#reachability)) | `logs-seshat.reachability-exo` |
-| `seshat.alert` | event | Lifecycle events of the built-in alert engine: an alert fired, was acknowledged, resolved or closed (Alerting) | `logs-seshat.alert-exo` |
+| `seshat.alert` | event | Lifecycle events of the built-in alert engine: an alert fired, was acknowledged, resolved or closed ([Alerting](../alerting.md)) | `logs-seshat.alert-exo` |
 | `seshat.passthrough` | event | the original message of an input with passthrough on, untouched (see [`passthrough.md`](passthrough.md)) | `logs-seshat.passthrough-exo` |
 
 Unknown devices produce the full event with `seshat.device.status: unknown`; the schema has no
