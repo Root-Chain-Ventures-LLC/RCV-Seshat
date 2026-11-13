@@ -409,9 +409,34 @@ Prometheus: `/metrics` on the status listener (`seshat_edge_link_up`, `_assigned
 `_events_in_total`, `_events_sent_total`, `_events_rate_limited_total`, plus the usual input, queue and KB
 families and process metrics); on the server `seshat_edge_up`, `_last_seen_timestamp_seconds`,
 `_queue_depth`, `_lag_seconds`, `_events_received_total`, `_events_duplicate_total` per edge, plus
-`seshat_edge_sequence_jumps_rejected_total` and `seshat_edge_auth_refused_total{reason}`. A member of a group with VRRP
+`seshat_edge_sequence_jumps_rejected_total` and `seshat_edge_auth_refused_total{reason}`; the skew metrics are in [Version skew](#version-skew). A member of a group with VRRP
 also exports `seshat_edge_vrrp_*` on the edge and the server `seshat_edge_group_vip_holder{group,instance,edge}`
 ([Status and metrics](#vrrp-status-and-metrics)).
+
+## Version skew
+
+Update the server first (every replica), then the edges. Two different things are said about an edge's release:
+
+- **Served.** A server keeps serving edges far behind it (an edge enrolled with 0.1.0 still streams; see
+  [hardening.md](hardening.md#12-upgrading)) and never refuses, reconfigures or stops an edge because of its
+  version.
+- **Supported.** The supported range is the server's own release and the previous minor release: a server
+  `X.Y.*` supports edges from `X.(Y-1).0` up to its own release number (for a server `X.0.*`, its own release,
+  unless the release notes document an older floor). The bound is derived from the server's version, so it moves
+  with each release. An edge outside the range is **unsupported**, which is a statement about testing, not a
+  refusal:
+  - **Newer than the server** (by release number; a pre-release server compares by its release core). Update
+    the server.
+  - **Older than the minimum.** Update the edge.
+
+The Edges page shows a badge next to the version with a short line under it (readable on a phone), and the
+full sentence in the edge's details; `GET /api/edges` (and `GET /api/edges/{id}`) carry `version_skew`
+(`newer_than_server` or `below_minimum`), `version_warning` and `min_edge_version` (empty on a development
+build, which then has no minimum); Prometheus exports `seshat_edge_version_newer_than_server{edge,site}` and
+`seshat_edge_version_below_minimum{edge,site}` (1 or 0) for every edge that reported a release number. An edge
+whose version is a bare build identifier (a development build) is not compared. The version comes from the
+edge's heartbeat (shown clipped to 64 characters), so it is empty on a replica until the edge has sent one there,
+and an edge that has not reported yet shows no warning.
 
 ## Health on the Edges page
 

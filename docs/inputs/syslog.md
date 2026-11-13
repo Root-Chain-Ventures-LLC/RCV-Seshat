@@ -232,9 +232,33 @@ The allow-list takes CIDRs or addresses; empty allows all.
 
 * `seshat_syslog_messages_received_total{transport}`
 * `seshat_syslog_messages_dropped_total{reason}` (`allow_list`, `rate_source`, `rate_global`,
-  `queue_full`, `conn_limit`, `conn_limit_source`, `tls_handshake`, `empty`)
+  `queue_full`, `conn_limit`, `conn_limit_source`, `tls_handshake`, `empty`, `truncated_datagram`)
 * `seshat_syslog_parse_total{format}` (`rfc5424`, `rfc3164`, `cef`, `leef`, `other`)
 * `seshat_syslog_truncated_total`, `seshat_syslog_grammar_total{result}`, `seshat_syslog_connections`
+
+### The UDP sockets
+
+UDP is read from a group of sockets on the one port (`SO_REUSEPORT`, Linux), one reader each, so a
+sender's messages stay in order; `SESHAT_UDP_READERS`, `SESHAT_UDP_BATCH`, `SESHAT_UDP_YIELD` and
+`SESHAT_UDP_HANDOFF` tune it (`.env.example`). Things the kernel does before Seshat sees a datagram
+are exported by the UDP layer shared with flows:
+
+* `seshat_udp_kernel_drops_total{listener,socket}` counts datagrams the kernel dropped because a
+  socket's receive buffer was full (`SO_RXQ_OVFL`; `nstat UdpRcvbufErrors` shows the same for the
+  whole host). A rate here means Seshat cannot keep up with, or is starved by, the sender: raise
+  `net.core.rmem_max` (the listener asks for 8 MiB per socket) and look at the CPU. A **sender is
+  never split across sockets**, so one very busy sender lands on one socket; when that socket's
+  reader is saturated (busy at least `SESHAT_UDP_HANDOFF` percent, default 90, of a 50 ms window and its
+  socket never ran dry) it hands its datagrams to the shared worker pool for the next half second
+  instead of decoding them (0 = never), which keeps a single device sending tens of thousands of messages
+  a second from overflowing its socket (`seshat_syslog_udp_handoff_total` counts the datagrams). While a
+  reader hands off, the order of that sender's messages is not guaranteed.
+* `seshat_udp_foreign_sockets{listener}` is the number of other sockets bound to the same port
+  (read from `/proc/net/udp` and `/proc/net/udp6` at start and every 30 seconds). `SO_REUSEPORT` lets a
+  second Seshat (or anything else run by the same user) bind next to this one with no error and take a
+  share of the datagrams; anything above 0 is logged as a warning and should be a stale process to stop.
+* A datagram longer than the receive buffer (it cannot happen for a valid UDP payload) is counted as
+  `truncated_datagram` and dropped. A panic while handling one datagram drops that datagram only.
 
 `GET /api/events/tail?dataset=seshat.syslog&limit=500` returns the last events held in memory (at
 most 500 per dataset; a syslog flood never pushes traps out of their own ring).

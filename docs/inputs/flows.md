@@ -21,6 +21,9 @@ once. The listener name in `seshat.source.listener` (`netflow-udp-default`, `ipf
 
 Other variables: `SESHAT_GEOIP_CITY_DB`, `SESHAT_GEOIP_ASN_DB` (see [GeoIP and ASN](#geoip-and-asn-bring-your-own)),
 `SESHAT_PACKS_DIR` (element dictionaries).
+`SESHAT_FLOW_RECYCLE_EVENTS=off` (also `0`, `false`, `no`; any case) gives every flow record a freshly allocated event instead of one from the pool that
+is taken back once every destination, tap and ring has let go of it (the default; it disables event pooling only, the queue and reader buffer reuse stay on, and it only changes how much
+memory the garbage collector has to deal with).
 
 The roles `all`, `collector` and `edge` start the listeners; `console` does not (the API answers
 `404 not_running`).
@@ -261,13 +264,15 @@ start-up (at most 100 000 rows are read; the excess is logged and ignored).
 | `seshat_flow_packets_received_total` | `version` (`netflow5`, `netflow9`, `ipfix`, `sflow5`) |
 | `seshat_flow_records_total` | `version` |
 | `seshat_flow_templates_total` | |
-| `seshat_flow_dropped_total` | `reason`: `allow_list`, `rate_limit`, `queue_full`, `unsupported_version`, `decode_error`, `too_many_exporters` (no longer produced: exporters are evicted instead) |
+| `seshat_flow_dropped_total` | `reason`: `allow_list`, `rate_limit`, `queue_full`, `unsupported_version`, `decode_error`, `truncated_datagram`, `too_many_exporters` (no longer produced: exporters are evicted instead) |
 | `seshat_flow_records_dropped_total` | `reason`: `no_template`, `malformed`, `template_limit`, `record_limit`, `template_invalid` |
 | `seshat_flow_template_state` | gauge, `kind`: `count`, `bytes` (estimated heap held by templates) |
 | `seshat_flow_evicted_total` | `kind`: `exporter`, `template`, `domain` |
 | `seshat_flow_unknown_ie_records_total` | |
 | `seshat_flow_counter_samples_total` | |
 | `seshat_flow_counter_metrics_total` | `seshat.metric` events made from sFlow counter samples |
+| `seshat_udp_kernel_drops_total` | `listener`, `socket`: datagrams the kernel dropped on a flow socket because its receive buffer was full (`SO_RXQ_OVFL`); shared with syslog, see docs/inputs/syslog.md |
+| `seshat_udp_foreign_sockets` | `listener`: other sockets bound to the same UDP port (`SO_REUSEPORT` lets a second instance share it silently); normally 0 |
 | `seshat_flow_counter_metrics_dropped_total` | `reason`: `datagram_limit`, `interface_limit`, `rate_limit` (counter records, one per interface; `rate_limit` is the per-event bucket) |
 | `seshat_flow_truncated_headers_total` | sFlow sampled headers whose IPv6 extension-header chain ran past the captured bytes |
 | `seshat_flow_exporters` | gauge |

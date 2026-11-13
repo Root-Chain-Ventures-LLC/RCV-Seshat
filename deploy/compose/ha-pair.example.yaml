@@ -41,7 +41,7 @@
 name: seshat-ha
 
 x-seshat: &seshat
-  image: ghcr.io/root-chain-ventures-llc/seshat:0.8.1
+  image: ghcr.io/root-chain-ventures-llc/seshat:0.9.0
   restart: unless-stopped
   network_mode: host
   user: "0:0"

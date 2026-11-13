@@ -152,6 +152,10 @@ Both are edited in the UI or with `PUT /api/inputs/snmp` and apply immediately o
 | `seshat_snmp_informs_acked_total` | none |
 | `seshat_snmp_traps_sampled_total` | none |
 
+The listener's readers let the scheduler run other goroutines every 8 traps (`SESHAT_TRAP_YIELD`, 0 = never):
+a trap costs about 80 microseconds, a reader with traps waiting never blocks, and without the pause the
+goroutines it wakes (the output writer, the sightings tap) waited behind it for up to 10 ms.
+
 `v3_auth_failed` covers unknown users, wrong passphrases and undecryptable messages.
 `v3_not_in_time_window` is the replay/skew check above. `decoder_panic` counts datagrams on which a
 decoder (the SNMP library included) failed unexpectedly: the datagram is dropped, `seshat_input_panics_total{input="snmp_trap"}`

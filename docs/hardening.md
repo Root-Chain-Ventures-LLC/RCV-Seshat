@@ -339,7 +339,8 @@ Resource limits are not imposed (they depend on your load): see the commented `m
 2. **Server first, then edges.** A new server keeps serving edges enrolled with 0.1.0, which cannot rotate
    their bearer token until upgraded (it expires after `SESHAT_EDGE_TOKEN_MAX_AGE`, 400 days by default,
    unless you set `0` or enrol them again); upgrade the edges afterwards. An edge newer than its server is
-   not a tested combination. In SQLite clusters upgrade the nodes back to back (until all run the new
+   not a tested combination, and an edge more than one minor release behind its server is served but not
+   supported: both are flagged on the Edges page ([Version skew](edge.md#version-skew)). In SQLite clusters upgrade the nodes back to back (until all run the new
    release, nodes refuse each other's drain calls and sync pauses, then resumes). The Device Tracker portal
    comes last. Every login session ends once at this upgrade (session ids are now derived from the key):
    users sign in again.

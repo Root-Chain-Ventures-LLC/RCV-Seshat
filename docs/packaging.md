@@ -167,7 +167,33 @@ not supported. Within a cluster, update the nodes one after another (drain, upda
 Helm runs it as a job before any pod restarts). Migrations only go forward and only add: a new column is nullable or has
 a default, and nothing is dropped or renamed in the release that stops using it. The previous release therefore keeps
 working against the new schema while replicas are being replaced. There is no downgrade of the schema: to go back,
-restore the backup you took before the update.
+restore the backup you took before the update ([Rolling back](#rolling-back)).
+
+**The downgrade guard.** Every applied migration is recorded with a class: `expand` (the previous release keeps working
+against it) or `contract`. When a binary starts it compares the versions in the database with the ones it knows:
+
+| What the database has | What happens |
+|---|---|
+| nothing the binary does not know | normal start |
+| newer migrations, **all `expand`** | the binary starts and logs a warning on every start. This is the replica of the previous release that is still running while a rolling update replaces the others; finish the update |
+| newer migrations, **any not `expand`** (or with no recorded class) | the binary **refuses to start**. The error names the newest migration it knows, the newest applied, and points to the backup |
+| the same, with `SESHAT_ALLOW_NEWER_SCHEMA=1` | it starts anyway and logs a warning on every start. For experts who have checked that the old binary does not touch the changed tables; data can be misread or corrupted |
+
+The class covers the **shape** of the schema; a release that starts writing values the previous release cannot read is
+marked `contract` as well, and the previous release must be stopped before it is applied. `store migrate` and the
+Storage page report the newest migration the running binary knows, plus how many newer ones it does not.
+
+The guard applies to PostgreSQL and SQLite alike and to every command that opens the database (the server, the
+`store migrate` job, the admin commands). The edge collector has no database schema, so it has no guard; its skew rule
+is the one above (server first, edge never newer than its server).
+
+### Rolling back
+
+1. Stop every replica of the release you are leaving (a rolling update that has not finished: stop all of them).
+2. Restore the database backup taken before the update (PostgreSQL: restore the dump or snapshot; SQLite: put back the
+   `seshat.db` file from the backup, together with the `seshat.db-wal` and `-shm` files of that backup if it has them).
+   Data written after the backup is lost; export what you need first.
+3. Start the previous release. Do not start it on the migrated database: it refuses, by design.
 
 **Changing data without a release.** Vendor packs are plain files that the inputs read when they start. Point
 `SESHAT_PACKS_DIR` at a directory of your own (a copy of the shipped packs plus yours, for example a mounted volume)

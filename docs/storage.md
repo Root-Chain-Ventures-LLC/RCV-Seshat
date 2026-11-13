@@ -49,6 +49,11 @@ on large nodes can exhaust the `max_connections` of a shared server. Cap it with
 (Helm: `database.maxConns`) or with `pool_max_conns` in the URL. The setting wins when both are present. A URL
 value below 8 is raised to 8; `SESHAT_DATABASE_MAX_CONNS` below 8 is refused at start.
 
+**Schema newer than the binary.** A replica started on a database that a newer release migrated refuses to start
+unless every newer migration is expand-only (a rolling update in progress), and names the rollback (restore the
+backup) in the error. `SESHAT_ALLOW_NEWER_SCHEMA=1` overrides it, with a warning on every start. See
+`docs/packaging.md`, "The downgrade guard".
+
 With a cap of 8 a replica uses at most 8 + 1 + 1 + 4 = 14 connections, so three replicas need 42, plus
 what `psql` sessions, monitoring and other applications use. Keep `max_connections` comfortably above that.
 

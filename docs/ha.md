@@ -31,7 +31,7 @@ same there.
 - **One SNMPv3 identity per cluster.** One engine ID and one set of USM users, so a sender that
   fails over from one node to the other keeps authenticating.
 - **Shared state.** In PostgreSQL mode the database is shared. In SQLite mode a small authenticated
-  peer protocol replicates settings, v3 users, flow templates and the device knowledge base.
+  peer protocol replicates settings (including the installed vendor packs), v3 users, flow templates and the device knowledge base.
 
 ## Cluster-wide invariants (every mode)
 
@@ -264,7 +264,8 @@ node. A machine that really died takes its addresses with it.
 1. On node-b (the one currently *not* holding the address, or either in mode 2): **Drain**, wait for
    `drained, queues empty`.
 2. Stop it, upgrade the image or binary, start it. Migrations run once, under a lock, and they are
-   additive within a release train; check the release notes before mixing versions for long.
+   additive within a release train; check the release notes before mixing versions for long. In SQLite
+   mode the two nodes stay in sync across the versions ([hash schema](#rolling-upgrades-and-the-sync-hash-schema)).
 3. Wait until its row shows `active` and, in SQLite mode, the Cluster page shows the peer `in sync`.
 4. Repeat for node-a. (With preemption the address returns to the preferred node on its own.)
 
@@ -324,6 +325,29 @@ SESHAT_SECRET_KEY=<identical on every node>
   field from whichever observed it last (ties broken by confidence, source, then value, so every node
   makes the same choice). Addresses and hostnames of a device are unioned. Devices are matched by
   scope and address, engine ID or serial, never by internal ID.
+
+### Rolling upgrades and the sync hash schema
+
+**Rolling upgrades are supported from the previous release** (for example 0.8.x to the next one). A cluster
+on 0.5 or older must go through 0.6 or later first: those releases hash the device records differently and never
+report their devices in sync with a newer node.
+
+During a rolling upgrade the two nodes run different releases for a while. The peer protocol keeps
+them in step by comparing digests of the same *form*:
+
+- Each replicated section (settings, SNMP, flow templates, devices) has a **hash schema** number: the
+  version of the rule that turns the section into a digest. Every section is schema 1 today; that is the
+  form releases 0.6.0 through 0.8.1 compute, and those releases send no schema at all, so a peer that names
+  none (or an answer that reports none) is schema 1.
+- A node asks for a peer's digest naming the schemas it knows (`GET /cluster/v1/digest?schemas=devices:2,...`).
+  The answering node hashes each section at the **lower** of the two numbers and reports what it used
+  (`hash_schemas`). The newer node then compares its own digest in the older form, so fields only the newer
+  release knows cannot keep a mixed pair "not in sync".
+- When a section is compared below the node's own schema, the peer's entry in `GET /api/cluster` carries
+  `hash_schemas` (section to the schema it was compared at) and the Cluster page shows it next to the peer.
+- The data itself still travels whole: an older node ignores fields it does not know, and a newer node fills
+  them in once the older one is upgraded (the digests then differ again and the next round transfers them).
+
 
 ### The edge relay across nodes
 

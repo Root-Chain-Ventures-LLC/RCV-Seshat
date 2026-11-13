@@ -173,7 +173,7 @@ tells them it was acknowledged. Policies run by `priority` (lower first); `stop`
 
 ## Starter rules
 
-Shipped disabled on the first start of a deployment (edit or delete them freely; they are not re-created):
+Shipped disabled. Each starter has a stable key and Seshat remembers the keys a deployment has seen: on start, a starter the deployment has never seen is added (disabled), including one introduced by a later release. A starter you edited is left alone, and one you deleted is not re-created:
 
 | Rule | Kind | Condition |
 |---|---|---|

@@ -160,8 +160,10 @@ Singleton jobs (retention, session sweep, change-feed pruning) run on one pod.
   (default `only` for the stateless pods the bus gives you; `hybrid` keeps a local write-ahead queue); the chart
   also sets `SESHAT_DATA_EPHEMERAL=1` whenever `/data` is an emptyDir (`persistence.enabled=false` or the bus on).
 - **Rollback:** `helm rollback seshat <revision>` restores the previous pods. Migrations are not
-  reversed: keep upgrades to versions that migrate forward compatibly, and take a database backup
-  first for a release that changes the schema (the release notes say when).
+  reversed: take a database backup first for a release that changes the schema (the release notes say when).
+  A previous release started on a schema it does not know refuses to start unless every newer migration is
+  expand-only (it then starts with a warning); in that case restore the backup, then roll back
+  (`docs/packaging.md`, Rolling back).
 - `kubectl rollout status statefulset/seshat` shows progress; `kubectl get pods -o wide` shows the
   node of each pod.
 
