@@ -53,6 +53,18 @@ TCP and TLS connections may mix both framings of RFC 6587:
 * **octet counting**: `<length> <message>`, where the message starts with `<` (its PRI);
 * **newline**: one message per line (CRLF accepted).
 
+**Continuation lines** (opt-in). A wrapped message arrives as several lines; with `join_continuations` on, TCP and
+TLS newline-framed streams join them. The result depends only on the bytes and the window, never on how TCP
+segmented them: a message that starts with a PRI waits at most `join_window_ms` (default 50 ms, 1 to 1000; counted from
+when the message was read) for more lines, and a following line is a continuation only when it starts with a space or
+a tab and, after that indent, does not start with a PRI (`<` digits `>`): an indented message is a message. A line with
+no indent is never merged, octet-counted frames never join, and at most 64 lines are joined, never past the 64 KiB cut.
+The lines are joined with a line feed. A continuation that arrives after the window is a message of its own (it is the
+price of not holding messages back), and with joining on every message that has no continuation is delayed by up to the
+window. Off by default, both settings are per input and apply to its TCP and TLS listeners. Grammars see the joined
+text; their `.` does not match the line feed, so a grammar that wants the detail lines uses `(?s)` or `[\s\S]`. UDP is
+not touched: one datagram is one message already.
+
 A line that starts with digits and a space but is not followed by `<` is an ordinary line, not a
 length. Lines or counted frames longer than **64 KiB** are truncated, counted
 (`seshat_syslog_truncated_total`) and the connection stays in sync. Connections have an idle
@@ -106,8 +118,8 @@ For a timestamp without a zone Seshat picks the zone of the sender, first match 
 1. **Address rule** of the input (`time_zones` with an address or a CIDR prefix): an exact address
    beats any prefix, a longer prefix beats a shorter one.
 2. **Device record** (`time_zone` of the device in the knowledge base, found by the sender's address):
-   set by hand when you adopt a device, filled from the NetBox connector (the `time_zone` of the
-   device's site), or a `time_zone` column of a CSV or HTTP connector.
+   set by hand when you adopt a device, filled from the NetBox connector (the device's own custom field named in the connector's
+   `time_zone_field`, else the `time_zone` of the device's site), or a `time_zone` column of a CSV or HTTP connector.
 3. **Hostname rule** of the input (`time_zones` with the name in the message header, exact or
    `*.example.com`). It applies to every sender that has no zone of its own from steps 1 and 2,
    including a sender whose address belongs to a known device whose record carries no zone: a switch
@@ -147,8 +159,8 @@ one-day tolerance for a clock that runs ahead; anywhere else the past reading wi
 line keeps its year.
 
 Every event whose timestamp needed a zone carries it: `event.timezone` (the zone applied, for example
-`America/Los_Angeles`) and `seshat.syslog.timezone_source` (`rule`, `device`, `site`, `assume_tz`, or
-`auto`), next to `event.original` (the line as received) and `event.created` (the receive time).
+`America/Los_Angeles`) and `seshat.syslog.timezone_source` (`rule`, `device`, `site`, `assume_tz`,
+`auto`, or `detected`), next to `event.original` (the line as received) and `event.created` (the receive time).
 Compare `@timestamp` with `event.created` to spot a device whose clock is wrong.
 
 ### `assume_tz: auto`
@@ -168,6 +180,56 @@ learned offsets are kept in memory (at most 16384 senders, forgotten after a day
 are relearned after a restart. They are listed under `auto_tz` in `GET /api/inputs/syslog` (status):
 state, offset or candidate, message count and last seen per sender, so a clock that is simply wrong
 is shown instead of silently corrected.
+
+### Steady clock offsets
+
+A sender that writes local time without a zone is read in the zone Seshat has for it (above). When that is
+not the zone its clock is in, every timestamp of that sender is off by the same whole number of hours (or
+half or quarter hours): its events land hours in the past or future with `seshat.syslog.timezone_source`
+`assume_tz`. Seshat watches for exactly that. The wall clock a zone-less timestamp shows, read as UTC, minus the
+receive time, is the sender's own offset from UTC. A sender is **flagged** when that offset
+
+- rounds to the same quarter hour on 10 consecutive messages spread over at least 2 minutes, with every
+  reading within 2 minutes of that quarter hour (a clock that drifts, jumps about, or a relay that replays
+  a backlog is not an offset), and
+- differs from the zone Seshat applied, and
+- the sender has **not** sent a timestamp with its own zone (RFC 5424, or ISO 8601 with an offset): such a
+  sender says what its zone is and is never flagged or corrected.
+
+Only **known devices** (inventory entries and adopted devices) are watched, so a spoofed source address cannot fill
+the table; `detect_unknown_senders: true` watches every sender. Starting to watch a sender is rate limited (50 a
+second); a table that is full (16384 senders) drops its least recently seen sender that is not flagged, and a table of
+flagged senders only refuses the new one (counted in `untracked_senders`).
+
+The flag is a **zone** only when the offset is one that exists (the whole hours from -12:00 to +14:00 and the half and
+quarter hour zones such as +05:30, +05:45, +08:45, +12:45). Another steady skew (+03:15, say) is flagged with
+`kind: "clock_error"`: the sender's clock is wrong, a zone does not fix it, nothing is suggested but fixing its time
+source, and it is never corrected. The flag drops after 5 consecutive messages that agree with the applied zone again
+(a rule or an inventory zone fixed it). Flapping or irregular skew never reaches the count.
+
+The state is **in memory, per process**: each node of a cluster, each edge and each restart learns for itself, so a
+sender is flagged again only after the next 10 messages over 2 minutes, and until then (and on a node that has not seen
+enough of its traffic) its events are dated as before; nothing is shared or persisted.
+
+Where it shows: `offset_detect` in the input status (`GET /api/inputs/syslog`, and the Syslog input page,
+"Steady clock offsets"), and `GET /api/inputs/syslog/offsets` (optionally `?addr=192.0.2.7,192.0.2.8`; an empty `addr`
+is `400`), which the device drawer calls for the device's addresses. Each flagged sender has the offset (`+08:00`),
+its `kind`, the zone it was read in and where that came from, message counts, and for a zone the **suggested fix**:
+`suggestion.time_zones_rule` (`{"match": "192.0.2.7", "tz": "+08:00"}`, add it to `time_zones`) and
+`suggestion.inventory_zone` (the `time_zone` to set on the device record). That is the lasting fix; an
+IANA name such as `Europe/Berlin` also follows daylight saving, where the detected offset does not.
+
+**Automatic correction** is opt-in: `correct_detected_offsets: true` for the whole input, or
+`correct_detected_sites: ["example-site-a"]` for the senders of those inventory sites (or of the input's own
+site when the device is not in the inventory). A message of a flagged sender is then read in its detected offset as a
+fixed zone (`event.timezone` `+08:00`, `seshat.syslog.timezone_source` `detected`), and its `@timestamp` is right,
+**only when that message itself shows the flagged offset**. A message that looks aligned with the applied zone, or shows
+another offset (a relay forwarding several zones; a clock that has just changed for daylight saving, until the new offset
+has been confirmed) is read as before, never rewritten with a stale offset. `detected` takes its place in the order above
+**after** the address rule, the device record's zone and the hostname rule, and **before** the site zone and `assume_tz`:
+it replaces a zone that came from the site or from `assume_tz`, and never one an operator set by an address rule, a
+hostname rule or the device record (those senders are flagged, not overridden). The offset follows the sender's clock,
+so it is not a daylight saving rule: set the real zone when you can.
 
 ### Clock skew
 
@@ -205,7 +267,25 @@ by *template*: UUIDs, MACs, IP addresses (with `/prefix` or `:port`), hex string
 `t-` plus eight hex digits of its SHA-256, stable across restarts, and is stored in
 `seshat.syslog.template_id`.
 
-The table keeps at most **10 000** templates (least recently seen evicted) with count, first and
+Masking rules, so that one message shape is one template whatever the device pads or prints:
+
+* Runs of whitespace (spaces, tabs, line breaks) are one space; the ends are trimmed.
+* `<MAC>`: a full 48-bit address in colon, dash or dotted form (including `ff:ff:ff:ff:ff:ff`).
+* `<IP>`: IPv4 or IPv6, with an optional `/prefix` or `:port`; a range `192.0.2.1-192.0.2.9` is `<IP>-<IP>`.
+* `<HEX>`: `0x` literals, hex words of 8 or more characters, colon-separated hex groups that are not an
+  address (`02:00:5e`, `0237:0800`; two-digit all-numeric groups such as `12:00:01` stay numbers), hex words
+  of 4 to 7 characters that start with a digit and carry a letter (`86dd`), and a bare 4-digit token directly in
+  front of a MAC (the ethertype of a Junos `PFE_FW_SYSLOG_ETH_*` line, so `0800` and `8100` match `86dd`). A word
+  that starts with a letter (`ae10`, `e1000`) is a name, not a number.
+* `<PROTO>`: `tcp`, `udp`, `icmp`, `icmp6`, `ipv6-icmp`, `sctp`, `gre` or `esp` directly in front of an address
+  (case-insensitive). Other protocol words are ordinary words.
+* `<NUM>`: every other run of digits.
+
+What is still different between templates is meaningful variation: the interface type (`ge-` against `xe-`), the
+firewall action letter (`A`, `D`, `R`) and an IP protocol that is printed as a number. A grammar match is named by
+the grammar message (`<pack>/<grammar>/<message>`), not by masked text.
+
+The table keeps at most **10 000** templates with count, first and
 last seen and one example, and is written to the store every 60 s (table `syslog_templates`), so
 counts survive restarts. It is bounded in every dimension, because senders choose the messages:
 
@@ -213,7 +293,14 @@ counts survive restarts. It is bounded in every dimension, because senders choos
 |---|---|---|
 | `max_templates` | 10 000 | entries in memory (100 to 200 000) |
 | `max_template_text` | 1024 | bytes of masked text kept per template (64 to 8192); the template id is still derived from the whole masked message, only the stored text is clipped. The example is clipped to 512 bytes |
+| `join_continuations` | off | join indented continuation lines on TCP and TLS (see Framing) |
+| `join_window_ms` | 50 | how long a message waits for continuation lines (1 to 1000) |
 | `new_templates_per_minute` | 2000 | creation rate; new shapes beyond it are counted into one `overflow` template instead of evicting useful ones |
+
+At the cap a new template is never refused: the table evicts the least valuable of the 64 coldest entries
+(unmatched and unmuted entries before grammar-matched or muted ones, then the lowest count, then the coldest).
+A flood of one-off shapes therefore pushes out other one-off shapes, not a template that carried thousands of
+messages and is only quiet for the moment. (The store keeps the rows by last seen, as described below.)
 
 The stored rows are bounded the same way (text clipped on write, at most 50 000 rows, least recently
 seen unmuted rows trimmed first, muted rows never trimmed). Rows written by earlier versions that

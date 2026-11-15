@@ -56,6 +56,14 @@ beside the original message and the enriched document, with a link to the device
   record is *stale*: it is still used for enrichment (`seshat.device.status: stale`, level
   unchanged) while a refresh runs in the background. Nothing stops working because an inventory
   is slow.
+* **Never reported.** A known device (inventory or operator entered) that the knowledge base has
+  never looked up traffic for is *never reported*, not stale: it was listed but nothing has come
+  from it. *Stale* is kept for a device that did send something and then went silent past its
+  refresh time. The Devices page, `GET /api/devices?status=never_reported`, the summary counts and
+  `seshat_kb_devices` show them apart. A record written by an older release counts as heard once, when it
+  is first read, if its last-seen had moved off its first-seen; after that only traffic does (a seed, a
+  merge or replication of last-seen times never does). Events never carry it: an event is a sighting.
+  The `known` filter and count do not include never-reported devices, as they never included stale ones.
 * **Unknown senders are retried** about hourly, so a device added to the inventory later turns
   known without anyone touching Seshat. An inventory webhook (below) makes it immediate.
 * **Scope.** A device is identified by *(site, VRF, address)*, so `192.0.2.1` at two sites is two
@@ -67,6 +75,32 @@ beside the original message and the enriched document, with a link to the device
 The per-lookup cost is a few hundred nanoseconds with no locks and no allocation: the index is
 sharded copy-on-write, readers do one atomic load. Measured with 10,000 devices: 166 ns per lookup on one thread, 63 ns
 aggregate across 16 threads, 0 allocations.
+
+### Inventory devices that change address
+
+NetBox and Nautobot number every device. A seed finds a device by that number first, so a device
+whose primary address changed in the inventory is the **same record** on the next seed: the
+addresses the previous seed gave it and this one no longer lists are dropped (an address learned any
+other way stays), the new ones added, and a record that something else made for the new address in
+between (a stub from the device's own traffic, or a known record of the same name that no connector
+numbered, such as a replica's copy) is folded in with what it learned. A record that holds the
+address but carries another object's number is another device and is left alone. An object that
+lost its primary address in the inventory loses the address the seed gave it.
+
+A device record made by an older release gets its number the first time a seed or a lookup finds it by
+address. Duplicates an older release already left (the record at the old address and the current one, same
+name, neither numbered) are folded after a **complete** seed, and only when nothing is in doubt: same site
+and VRF, same name (case-insensitive), the name held by exactly one object of the connector and by exactly
+one known, un-ignored, un-numbered record, and none of that record's addresses claimed by a current object.
+Its addresses are not carried over. Any collision leaves both records for an operator to merge.
+
+Folding keeps what the Device Tracker holds under the absorbed record: its settings and binding (the
+survivor's own win when it has some), its location history and its reachability state move to the
+survivor's id; metric series and alert history stay under the old id. In a SQLite-mode cluster the object
+number travels with the record, the newer side's seed decides which addresses are the object's, and an
+address a fold or a re-address dropped is refused from peers for an hour, so a peer's old copy does not
+bring a duplicate or the old address back; two nodes that have not both seeded yet may differ until they
+have. CSV and HTTP sources number nothing and are matched by address as before.
 
 ## Connectors
 
@@ -102,8 +136,10 @@ Token authentication (`Authorization: Token ...`; a read-only token is enough).
   `GET /api/dcim/devices/<id>/` (or `/api/virtualization/virtual-machines/<id>/`) supplies name,
   manufacturer (vendor), device type (model), platform (OS), serial, role, tenant, site, location,
   tags and custom fields, and `GET /api/dcim/interfaces/?device_id=<id>` the interfaces.
-  The device's **time zone** is the `time_zone` of its site (`GET /api/dcim/sites/?slug=<site>`,
-  remembered for ten minutes per site); a site with no zone, or one that cannot be read, leaves the
+  The device's **time zone** is, when the connector's **Time zone custom field** (`time_zone_field`, for
+  example `time_zone`) is set, that custom field of the device (an IANA name or an offset such as `+08:00`; a
+  value that is not a zone is ignored); otherwise, or when the device has none, the `time_zone` of its site (`GET /api/dcim/sites/?slug=<site>`,
+  remembered for ten minutes per site). A site with no zone, or one that cannot be read, leaves the
   device's zone empty and changes nothing else. The syslog input uses it for timestamps that carry
   no zone (see the syslog input doc).
 * **ifIndex.** NetBox does not model SNMP ifIndex. Create an interface custom field (default name
@@ -181,6 +217,41 @@ Why it is off: it makes Seshat *originate* traffic toward devices on the strengt
 merely seen on the wire, which is something you should choose per site, and it needs credentials
 you may not want on a collector. Leave it off where an inventory connector already supplies names,
 and turn it on where it is the only source of interface names.
+
+### Interface names for inventory devices
+
+An inventory such as NetBox rarely lists ifIndex values, and a device it lists is *known*, so it is never
+looked up the way an unknown sender is. For such a device, at a site whose polling profile is on, Seshat
+therefore runs the same read-only poll on a schedule: every `SESHAT_KB_IFPOLL_EVERY` (default 24 h; `off`
+turns it off), each device at its own offset of up to 20% either way so a fleet does not poll in one burst,
+and at most 25 devices queued per 30-second sweep, run by two workers of their own (never the learning
+workers). A device never polled is first scheduled at a random moment within ten minutes of a start, so a
+restart does not poll everything at once, and in a cluster only the leader schedules. It applies to a known
+device (inventory or operator entered) whose interface table did not come from the inventory or the
+operator **and** that is a network device by role (the Device Tracker's infrastructure roles) or has sent
+syslog, traps or flows: the site's community is not sent to every host an inventory lists, only to devices
+that are, or demonstrably act as, network equipment. Each walk stops at 4096 rows; the answer fills
+ifName, ifAlias, speed and type, and sysDescr and sysObjectID when no higher-confidence source gave them. A
+poll that fails is retried after an hour, then two, and so on up to the schedule's own period; a
+hand-over refusal that names a wait is waited out. The poll is
+made by whoever owns the device: the server, an [edge](#from-an-edge) or the member of an edge group that holds
+it (an edge only ever answers; it never starts a poll), under the same never-poll list, allowed networks,
+rate limits, per-device budget and read-only rule as every other poll. `seshat_kb_interface_polls_total{result}`
+(`ok`, `failed`) counts them. After one cycle the interface names appear on flows
+(`seshat.flow.input_ifname`, `output_ifname`), on interface metrics and on traps
+(`seshat.device.interface.name`).
+
+**Names taken from the trap itself.** Until a device has been polled, a trap that carries an ifIndex but
+finds no name for it in the knowledge base is named from its own content, for that ifIndex only and
+without writing anything to the knowledge base: the IF-MIB `ifName` or `ifDescr` varbind of that row, else
+the one interface the trap's text names the way vendors write it: a known type prefix followed by
+slot/port numbers with a slash (Cisco `Gi1/0/14`, `Te1/1/1`, Dell OS9 `Te 0/31` as in `OSTATE_UP: Changed
+interface state to up: Te 0/31`, OS10 `ethernet1/1/3:1`, Arista `Ethernet12/1`, Juniper `ge-0/0/14`). A
+port-channel or loopback is taken only when the trap's own ifType says it is about one; times, IPv6
+addresses and bare `Loopback 0` are never read as interfaces, and text naming two different interfaces says
+nothing. The event says where the name came from in `seshat.device.interface.name_source` (`trap_varbind`
+or `trap_text`): it is a hint, not inventory. A name the knowledge base has always wins, and a (device,
+ifIndex) that gave nothing is not scanned again for 30 seconds.
 
 ### From an edge
 
@@ -270,6 +341,7 @@ To backfill, run an `_update_by_query` per device address over the time window i
 | `SESHAT_KB_CREATE_RATE` | `200` | new unknown records per second per site and VRF |
 | `SESHAT_KB_WORKERS` | `4` | background learning workers |
 | `SESHAT_KB_LEARN_QUEUE` | `10000` | bounded learn queue; a full queue drops the job and retries on the next sighting |
+| `SESHAT_KB_IFPOLL_EVERY` | `24h` | how often the interface table of an inventory-known device that gave none is polled (`off` disables) |
 
 A record also bounds what senders can teach it. Hostnames come in two slots: up to 16 given by an
 operator, an inventory connector, DNS, SNMP or a pack (the newest kept), and up to 8 learned from
@@ -304,7 +376,7 @@ their host names as a union (bounded by the list sizes above), so the names lear
 nodes end up on the same device record.
 
 Metrics: `seshat_kb_lookups_total{result=hit|stale|unknown|created|limited}`,
-`seshat_kb_devices{status=known|unknown|stale|ignored}`, `seshat_kb_learn_queue_depth`.
+`seshat_kb_devices{status=known|unknown|stale|never_reported|ignored}`, `seshat_kb_learn_queue_depth`.
 
 ## Known limits
 

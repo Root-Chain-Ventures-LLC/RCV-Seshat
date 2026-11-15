@@ -8,11 +8,13 @@ Elasticsearch/OpenSearch, Kafka, Splunk, an existing NMS, files). It also keeps 
 look up a MAC address, IP address, hostname or user and see what the device is, where it is, where it has been,
 and how old every fact is.
 It also checks that each tracked device is up (an ICMP echo and an SNMP uptime read), with metric
-samples and one event per state change for your alerting.
+samples and one event per state change for your alerting. A known device can be monitored (health, interfaces
+and reachability) without tracking where its clients are.
 It polls interface counters and device health over SNMP, turns sFlow counter samples into the same
 interface metrics, keeps a metric history, and has built-in alerting with notification channels (email,
 webhooks, chat and paging services). Vendor packs can be uploaded, activated and rolled back without a
-restart. Other tools reach it through a documented REST API (`/api/openapi.json`) and a read-only MCP
+restart. An alert rule can be dry-run against recent events before it is saved, and a storm view lists the
+busiest senders per dataset. Other tools reach it through a documented REST API (`/api/openapi.json`) and a read-only MCP
 endpoint (`/mcp`).
 
 Each input can also ship a **passthrough stream** beside the enriched one: the original message, untouched, as fast

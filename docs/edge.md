@@ -413,6 +413,43 @@ families and process metrics); on the server `seshat_edge_up`, `_last_seen_times
 also exports `seshat_edge_vrrp_*` on the edge and the server `seshat_edge_group_vip_holder{group,instance,edge}`
 ([Status and metrics](#vrrp-status-and-metrics)).
 
+## Changing one setting of an edge
+
+`POST /api/edges/{id}/config` replaces the whole document. To change one part, use a partial update. Every write, the
+replace included, takes the etag of the configuration you read (`config_etag` of `GET /api/edges/{id}`, also the `ETag`
+header) in `If-Match`; if somebody changed it since, the answer is `412 precondition_failed` and nothing is stored, and
+`428` when `If-Match` is missing. An edge that has no stored configuration yet takes `If-Match: *` (which matches any).
+Add `?dry_run=true` to any of them to get the diff and the validation without storing anything (no `If-Match` needed then).
+
+An edit is applied to the stored document as it is: only what you name changes. An edge that has no syslog section and gets
+one `time_zones` rule stores a syslog section holding that rule and nothing else (no listen address, no defaults; the defaults
+are filled in on a copy to validate and on the edge when it runs).
+
+| Call | Does |
+|---|---|
+| `PATCH /api/edges/{id}/config` | JSON merge patch (RFC 7386): objects merge, `null` removes a key, a list is replaced. `{"syslog":{"per_source_eps":75}}` changes that one key. |
+| `PUT /api/edges/{id}/config/{section}` | Replaces one section (`snmp`, `syslog`, `flow`, `upstream`, `rate_limit`, `outputs`, `relay`, `snmp_read`, `telemetry`, `snmp_listen`, `sync_interval_secs`); `null` removes it. |
+| `POST /api/edges/{id}/config/syslog/time_zones` | `{"match":"192.0.2.0/24","tz":"+08:00"}`: adds the rule, or changes the zone of the rule with the same `match`. |
+| `DELETE /api/edges/{id}/config/syslog/time_zones?match=192.0.2.0/24` | Removes that rule (`404` when there is none). |
+
+The answer is `{"edge", "diff", "dry_run", "changed", "restarts_listeners", "restart_sections"}`. `diff` lists `{path, op, before, after}` (a list element added or removed
+is its own line). A secret that changed shows by name only, for example `{"path": "telemetry.tls_key", "op": "secret_changed"}`; its value
+never shows. `restarts_listeners` is true, with the parts that cause it in `restart_sections`, when the change makes the edge restart its pipeline and
+rebind its sockets (see below); the dry run tells you before you apply. A change that changes nothing stores nothing and does not move the etag. The audit
+entry `edge.config` carries the mode, the etag before and after and the diff.
+
+### What a change does on the edge
+
+An edge restarts its pipeline when its configuration changes, which closes every listener until the new ones are bound.
+A change to the syslog section that leaves the listen addresses alone (a time zone rule, the allow-list, a rate limit,
+passthrough) is **applied to the running input instead: no listener is closed and nothing is lost**. Relay, SNMP reads, the tracker
+list, VRRP and the telemetry targets were already live. Any other change (an output, the upstream, a flow or trap listener, the telemetry
+listener) still restarts the pipeline; the edge reports how long its listeners were down in `last_restart_gap_ms` on
+its status page and `/api/status`, and logs it. If the new pipeline cannot start (a listen address that is taken, say), the edge **goes back to the configuration that ran**, keeps
+serving on it, does not claim the new etag in its heartbeat, and reports the reason: `config_apply_error` on its status page and
+`/api/status`, and on `GET /api/edges/{id}` (with `config_applied: false`). It tries the new configuration again after 5 s, then 10 s, up to 5 minutes,
+and clears the error when it runs; while the server cannot be reached it keeps to the pace of its sync backoff instead.
+
 ## Version skew
 
 Update the server first (every replica), then the edges. Two different things are said about an edge's release:
@@ -635,6 +672,45 @@ On the edge (`/metrics` and the status page): `seshat_edge_relay_enabled`, `_act
 server: `seshat_edge_relay_server_active`, `_sessions_total`, `_refused_total{reason}`, `_closed_total{outcome}`,
 `_bytes_total{direction}`. The Edges page shows whether an edge's control connection is up and how many
 sessions are open.
+
+### Where the control channel is
+
+`control_connected` in `GET /api/edges` means the edge has a control channel to the server. The node that answers
+knows only the channels it holds itself; the edge reports its own in every heartbeat (`control_up`), so
+`control_node` says where it is: `this` node, an `other` node of the cluster (the relay finds it there), `none` (the
+edge reports it is down) or `unknown` (not held here, and an older edge that does not report). The edge's report is
+the one in its newest heartbeat on any node, so `control_connected` reads the same on every replica (`control_node`
+differs by design: `this` on the node that holds the channel). Earlier releases
+reported only what the answering node held, so an edge whose control request had landed on another replica read
+as not connected while it was online and polling.
+
+## Backlog: edge sender, link or server
+
+`GET /api/edges` carries `throughput` for every edge that has sent a heartbeat. The numbers behind it are kept in the
+shared database, one row per edge and server node (the node that handled the requests writes its own), so every replica
+shows the same rates, verdict and control channel, whichever node the heartbeat or the stream reached.
+
+`rates` is true when there are two heartbeats at least 25 s apart in the last 90 s and the edge has been heard from in the last
+90 s; otherwise the numbers are zero, `limit` is `none` and `reason` says why ("offline / no recent samples", "collecting").
+Counters restart when the edge restarts. Rates are events per second: `input_per_sec` (what the edge's inputs
+produced), `sent_per_sec` (delivered upstream), `acked_per_sec` (how far the server's acknowledged sequence moved),
+`intake_per_sec` (accepted by the cluster's nodes), and `queue_trend_per_sec` with `queue_trend` (growing, draining,
+steady). `request_open_pct` is how much of the window a stream request was open and `server_processing_pct` the share
+of that time the server worked (reading and decompressing the batch, decoding, handing events on) rather than waited for
+the edge's bytes. `limit` reads them when the queue holds 100 events or more or is growing:
+
+| `limit` | Reading | Look at |
+|---|---|---|
+| `auth` | the edge reports its credentials refused (`unauthorized`); checked first, whatever the queue | re-enrol or rotate the edge's token |
+| `link` | requests are open most of the time and the server mostly waits for bytes, or the edge reports its link as not connected | the path between edge and server, MTU, a proxy |
+| `sender_stalled` | events are queued, nothing was sent in the window, the edge reports a working link | the edge's own status page |
+| `draining` | the queue is falling | nothing, unless it falls too slowly |
+| `server` | requests are open and the server spends most of that time working | database, outputs, enrichment on the server |
+| `edge_sender` | the server is idle most of the time and takes what it gets at once | the edge's batch size, interval and local rate limits |
+| `unclear` | neither side dominates | compare the rates and the trend |
+| `none` | no backlog, or nothing recent to say | |
+
+It is a reading of the numbers, not a proof; `reason` states what it used.
 
 ## SNMP reads
 

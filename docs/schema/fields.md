@@ -207,7 +207,7 @@ Conventions that apply to every field:
 
 | Field | Type | Origin | Req | Datasets | Description | Example |
 |---|---|---|---|---|---|---|
-| `seshat.device.status` | keyword | seshat | Y | trap, syslog, flow, flow_rollup, tracker, metric, reachability, alert, device | `known`, `unknown` or `stale`. Unknown senders still produce full events. | `known` |
+| `seshat.device.status` | keyword | seshat | Y | trap, syslog, flow, flow_rollup, tracker, metric, reachability, alert, device | `known`, `unknown` or `stale` on events; the `device` dataset (and the devices API) also reports `never_reported`, a known device nothing was ever heard from. Unknown senders still produce full events. | `known` |
 | `seshat.device.id` | keyword | seshat | C | trap, syslog, flow, flow_rollup, tracker, metric, reachability, alert, device | Stable device id from the device KB. | `dev-0003` |
 | `seshat.device.name` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, alert, device | Device name (inventory name, else sysName). | `switch3.example.com` |
 | `seshat.device.vendor` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, alert, device | Vendor from inventory or pack classification. | `Example Vendor` |
@@ -223,8 +223,9 @@ Conventions that apply to every field:
 | `seshat.device.custom` | flattened | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, alert, device | Inventory custom fields, stored flattened so any inventory schema fits. | `{"rack": "R3"}` |
 | `seshat.device.first_seen` | date | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, alert, device | When the KB first saw the device. | `2026-09-01T08:00:00.000Z` |
 | `seshat.device.last_seen` | date | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, alert, device | When the KB last heard from the device. | `2026-10-12T14:03:07.412Z` |
-| `seshat.device.interface.name` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, alert | Interface name resolved from the KB (ifIndex to ifName). Traps: the interface the notification is about. Tracker: the port the endpoint was seen on. | `GigabitEthernet1/0/14` |
+| `seshat.device.interface.name` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, alert | Interface name resolved from the KB (ifIndex to ifName). Traps: the interface the notification is about; when the KB has no name for the ifIndex, the name the trap itself gives (its IF-MIB ifName or ifDescr varbind, or the one interface its text names). Tracker: the port the endpoint was seen on. | `GigabitEthernet1/0/14` |
 | `seshat.device.interface.index` | long | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, alert | ifIndex as sent by the device. | `10114` |
+| `seshat.device.interface.name_source` | keyword | seshat | O | trap | Set to `trap_text` when the name was read out of the trap itself (its IF-MIB varbind or its text) because the KB had no name for the ifIndex; absent for a name the KB resolved. Treat a `trap_text` name as a hint, not as inventory. | `trap_text` |
 | `seshat.device.interface.alias` | keyword | seshat | O | trap, syslog, flow, flow_rollup, tracker, metric, reachability, alert | ifAlias (operator description) from the KB. | `Room 214 jack J-214` |
 | `seshat.device.sys_name` | keyword | seshat | O | device | SNMPv2-MIB sysName. | `switch3` |
 | `seshat.device.sys_object_id` | keyword | seshat | O | device | SNMPv2-MIB sysObjectID. | `1.3.6.1.4.1.32473.1.3` |
@@ -305,7 +306,7 @@ Conventions that apply to every field:
 | `seshat.syslog.appname` | keyword | seshat | O | syslog | RFC 5424 APP-NAME, or the RFC 3164 TAG without the PID. | `sshd` |
 | `seshat.syslog.procid` | keyword | seshat | O | syslog | RFC 5424 PROCID (or the RFC 3164 PID). | `2411` |
 | `seshat.syslog.msgid` | keyword | seshat | O | syslog | RFC 5424 MSGID. | `ID47` |
-| `seshat.syslog.timezone_source` | keyword | seshat | O | syslog | Why `event.timezone` was chosen: `rule` (a sender rule of the input), `device` (the `time_zone` of the device record), `site` (the input's zone for the device's site), `assume_tz` (the input's default) or `auto` (an offset learned for the sender by `assume_tz: auto`). Absent when no zone was applied. | `rule` |
+| `seshat.syslog.timezone_source` | keyword | seshat | O | syslog | Why `event.timezone` was chosen: `rule` (a sender rule of the input), `device` (the `time_zone` of the device record), `site` (the input's zone for the device's site), `assume_tz` (the input's default) or `auto` (an offset learned for the sender by `assume_tz: auto`) or `detected` (the steady clock offset the input detected for the sender, with automatic correction on: it replaces a site or `assume_tz` zone, never a rule or a device record's zone). Absent when no zone was applied. | `rule` |
 | `seshat.syslog.sd` | flattened | seshat | O | syslog | STRUCTURED-DATA as `<SD-ID>.<PARAM>` to value. Flattened because SD-IDs are open-ended. | `{"exampleSDID@32473.iut": "3"}` |
 | `seshat.syslog.extension` | flattened | seshat | O | syslog | Key/value pairs a pack parser or CEF/LEEF extension extracted, stored flattened (vendor-specific by nature). | `{"cs1": "policy-7"}` |
 | `seshat.syslog.parser` | keyword | seshat | O | syslog | Pack parser that matched (`<pack>/<parser>`). Absent when no parser matched (the line is clustered in the unknown inbox). | `builtin/rfc5424` |

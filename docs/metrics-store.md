@@ -129,14 +129,15 @@ per-series work at start. "Stale" and the revival of an idle series derive from 
 | `disk_budget_mb` | 4096 (0 = none, else at least 64) | the oldest chunks are deleted until under it, never the newest data; new series are refused meanwhile |
 | `series_idle_days` | 7 | a series with no sample for this long leaves the series cap and the ingest state; it stays listed and queryable |
 | `pending_mb` | 256 | the oldest unwritten chunks are dropped |
+| `idle_heartbeat_seconds` | 75 (30 to 150) | an unchanging series is written at most this often; another replica sees a live idle port as current because of it (a value stays current for five minutes) |
 
-A refused series is counted once per series, not once per sample (`refused_series_cap`, `refused_device_cap`, `refused_disk_budget`;
+A refused series is counted once per series, not once per sample (`refused_series_cap`, `refused_device_cap`, `refused_disk_budget`, and `admission.refused_priority_reserve` for series held back to keep room for state and core counters, see "What is admitted first";
 Prometheus `seshat_metricstore_refused_series_total{cap}`), and `GET /api/metrics/status` carries a note and the time of the last
 refusal. Existing series keep recording.
 
-**Disk budget.** On PostgreSQL the figure is `pg_total_relation_size` of the two tables, indexes included; elsewhere the bytes of chunk data times 1.7
+**Disk budget.** On PostgreSQL the figure is the live chunk data plus about 170 bytes of row and index overhead per row, plus the series table (never more than `pg_total_relation_size`): the table size itself is not used, because deleting rows does not shrink a PostgreSQL table, so a budget measured on it could never be met. Elsewhere the bytes of chunk data times 1.7
 (1.68 measured on SQLite). It is taken every 5 minutes. When it is over the budget, the oldest raw chunks are deleted first, then 5-minute, then 1-hour
-ones, 500 rows at a time with a short pause, until it is under; the deletions are counted (`budget_deleted`). The newest data is **never**
+ones, 500 rows at a time with a short pause (at most about 100 000 rows per round; the rest at the next round), until it is under, and it stops (`trim_ineffective`) if a round does not reduce the measured size; the deletions are counted (`budget_deleted`). The newest data is **never**
 deleted for the budget: the newest 2 hours of raw samples, the newest 24 hours of 5-minute buckets and the newest 48 hours of 1-hour buckets are
 kept. If that is not enough, deletion stops there, new series stay refused, and status says `over_budget: true`; whenever data was removed the
 status note says so ("older history is shorter than the retention says"). That is why the smallest budget accepted is 64 MB. Queries pick their
@@ -156,6 +157,127 @@ history. A restart lists idle series again without counting them. When retention
 
 Settings are changed with `PUT /api/metrics/settings` (administrators only, and not by a caller limited to a scope; audited) and take
 effect on this node at once and on the others within 30 s.
+
+### What is admitted first
+
+A streaming router can send one series per ARP neighbour, route entry or MAC entry: thousands of series that no screen draws, arriving
+before or among the interface counters and using up the per-device cap. Three rules keep the interface data.
+
+**Table paths are left out by default.** A sample whose path (without list keys) matches the built-in list never becomes a series. The
+built-in list is OpenConfig: the ARP and ND neighbour lists (`**/ipv4/neighbors/neighbor/**`, `**/ipv6/neighbors/neighbor/**`; the BGP
+session list is not one of them), the forwarding tables (`**/afts/**`), the BGP routes (`**/bgp/rib/**`, `**/loc-rib/**`) and the MAC table
+(`**/fdb/mac-table/**`). In a pattern `**` stands for any number of path segments, `*` for any run inside one segment, and a module
+qualifier (`Vendor-model:name`) on a path segment is ignored unless the pattern has one. Only the metric store is filtered: the same
+events still reach every destination a route sends them to, and Prometheus remote write, InfluxDB and OTLP see them as before.
+
+| setting | default | meaning |
+|---|---|---|
+| `table_paths_exclude` | `true` | `false` stores table paths for every device (the built-in list and `table_paths_extra` are not applied) |
+| `table_paths_extra` | `[]` | more path patterns to leave out (a vendor model with its own table) |
+| `table_paths_keep_devices` | `[]` | device names whose table paths are stored |
+| `table_paths_keep_inputs` | `[]` | telemetry input names (the target name, or `telemetry-dialout`) whose table paths are stored |
+
+Patterns have no leading or trailing slash and no empty segment; a pattern of only `**` is refused (it would leave out everything).
+A series that exists from before keeps its history and stays queryable, but it does not keep its slot: when the rule takes effect (a
+settings change, or the first refresh after the upgrade) the table series that are now left out are idled at once, whatever their age,
+their open chunks are finished and written, and a new sample revives one if the table paths are kept again. The input of a series is
+known only after it has reported since the start, so while `table_paths_keep_inputs` is set a stored series of unknown input is
+decided by its next sample.
+`GET /api/metrics/status` shows `admission.excluded_table_samples` and the biggest `admission.excluded_paths`
+(`seshat_metricstore_excluded_table_samples_total`).
+
+**State and core interface counters come first.** A series is in one of three classes: *state_core* (every state series, and on an
+interface oper and admin status, speed (`high-speed`, `lag-speed`, port speed), octets, packets, errors and discards in both
+directions; also the same counters of a few vendor models that are not OpenConfig: Junos `/junos/system/linecard/interface/` and the
+Cisco IOS XR `infra-statsd` generic counters), *interface* (every other series directly under `interfaces/interface/`) and *other* (the rest, including what hangs under a
+logical unit, such as an ARP entry or an address). On PostgreSQL the caps and so the reserve count series the same way as the caps do (see "Caps"). `core_priority_pct` (default 20, 0 to 50, 0 switches it off) keeps that share of
+`max_series` and of `max_series_per_device` for the class before: *other* series stop being admitted when the device or the store is
+within that share of the cap, *interface* series within half of it, state and core counters until the cap. With the default 5 000
+series per device that is 4 000 for *other*, 4 500 for *interface* and 5 000 for state and core.
+
+**Interface series are kept or cut by whole interface.** An interface that has a series in the store (its status, say) is completed up
+to the cap. A new interface whose first non-core series does not fit is marked cut: its other series are refused, one by one, instead of
+leaving half an interface; its state and core counters are still admitted. Existing series are never evicted, so the order matters
+only for series that arrive after the cap is near.
+
+**Scope of the counts.** The reserve and the idling of left-out series use the same counts as `max_series` and `max_series_per_device`
+(`series_cap_scope` in the status): on PostgreSQL every replica reads the one shared series list, so the reserve is a share of the
+merged count of all replicas and each replica applies the table rules to the shared list itself (at its refresh, within about 30 s of a
+settings change and at once when it reports a left-out sample); on SQLite each node counts its own file. `refusing_reason` in the
+status also says `priority_reserve` (the active count is within the reserve: only state and core counters are admitted), after
+`disk_budget` and `series_cap`; `refusing_new_series` and its Prometheus gauge are true for those three only. Table paths left out are
+intended behaviour, not a refusal: `admission.excluded_table_samples` (all time), `admission.excluded_table_samples_10m` and
+`admission.excluded_paths` report them.
+
+What was refused and why is in `GET /api/metrics/status` under `admission`: `refused_by_class` (`state_core`, `interface`, `other`),
+`refused_priority_reserve`, and `devices`, the devices that lost the most with their series by class and by reason (`series_cap`,
+`device_cap`, `disk_budget`, `priority_reserve`, `interface_cut`). Each series is counted once, when it is first refused. Prometheus:
+`seshat_metricstore_refused_series_total{cap="priority_reserve"}`. The report holds at most 500 devices and 200 table paths; `untracked`
+counts the rest.
+
+### Internal interfaces
+
+A router lists interfaces that are not ports: tunnels, packet-forwarding and line-card links and other pseudo interfaces. They are
+stored when admitted, but the interface table (`GET /api/metrics/interfaces`) and the interface totals of the device views
+(`interfaces_total`, `_up`, `_down`, ... in `GET /api/metrics/devices` and `.../devices/{device}`) leave them out by default; the answers
+say how many in `hidden_internal` and `interfaces_internal_hidden`. The built-in list matches the name before the first `.` (the
+logical unit) and covers Junos `fti*`, `pimd`, `pime`, `vtep`, `esi`, `pfe-*`, `pfh-*`, `lc-*`, `lsi`, `dsc`, `mtun`, `cbp0`, `demux0`,
+`bme0`, `jsrv`, `rbeb` and the Cisco `Null*`. `gre`, `ipip`, `tap` and `pp0` are not on it, because they can carry real traffic.
+The match is on the name alone (the store does not know a device's vendor); `xe-0/0/0`, `ae0`, `lo0`, `irb` and `em0` are not
+matched. An interface that shows traffic in the current window (a fresh rate above zero) is never hidden, whatever its name.
+Add patterns (`*` is any run of characters, `?` one) with `internal_interface_extra`, and names that are never hidden with
+`internal_interface_keep`. To show them all: `show_internal_interfaces: true` in the settings (everyone), or `include_internal=1` on the
+interfaces, devices and device requests.
+
+### Telemetry paths
+
+The telemetry input gives every leaf one canonical path, the form the SNMP and sFlow collectors use for the shared interface metrics
+(`/interfaces/interface[name=X]/...`). A stream that sends `interface[name=ae0]/aggregation/state/lag-speed` (the `interfaces/`
+container missing, from a prefix or a sensor) and one that sends `interfaces/interface[name=ae0]/aggregation/state/lag-speed` are one
+series, and an `openconfig-interfaces:` qualifier on the first element is dropped. Only interface paths are rewritten: the first element is
+`interface` and the element after its keys is an OpenConfig interface child (`state`, `config`, `aggregation`, `ethernet`,
+`subinterfaces`, `hold-time`, ...). Every other path (other models, other `openconfig-*:` qualifiers, a vendor's own `interface[...]/statistics/...`)
+reaches routes and the store exactly as the device sent it. The metric store applies the same rule when it reads an event, so older
+sources are covered too. History already stored under the path without `interfaces/` stays queryable under it; its series are idled
+at the upgrade and new samples go to the canonical path, so a query or an alert rule written against the old path must be changed.
+
+### Defaults on a shared database
+
+When the history lives in the application database on PostgreSQL, every replica and the rest of the application share it, so a fresh
+install starts lighter than on SQLite: `max_series` 20 000, `max_series_per_device` 2 000, `disk_budget_mb` 1024, `flush_seconds` 60 and
+`pending_mb` 128 (SQLite: 50 000, 5 000, 4096, 30, 256). Only a store that holds no metric history yet gets them; an install that upgraded with data and has no saved settings keeps the
+previous defaults (they are saved at first start). Settings you save are never changed, and `PUT` saves only the fields you send; raise them with
+`PUT /api/metrics/settings` when the database can take it (`GET /api/metrics/settings` returns the `defaults` for this backend).
+`max_series` on PostgreSQL is a cap on the **shared** list: every node reads the one list, so `series` in the status is the count over all
+replicas, and a node's own part is `series_this_node`. On SQLite each node has a file of its own and the cap is per node
+(`series_cap_scope` says which). A count above the cap (a lowered cap, or several nodes admitting at once) is reported as `series_over_cap`;
+only new series are refused.
+
+### How a flush keeps up
+
+A flush writes the finished chunks first, then the open ones, in transactions of at most 500 rows or 2 MB, several rows per statement.
+Each transaction has its own timeout (a quarter of the flush interval, 2 to 20 s) and a flush starts no new transaction after 70 % of the
+interval. Whatever is left is carried to the next flush, which starts where this one stopped; nothing is retried as a whole. If a
+transaction fails or times out the flush stops there (one `flush_errors`), the store backs off (5 s doubling to 5 min) and the rest
+waits. Flush start times and back-offs are jittered so replicas do not write together. The status shows how it is going under `flush`:
+`last_duration_ms`, `rows_per_second`, `backlog_rows` (planned and not written by the last flush), `pending_chunks`, `behind_streak`;
+three flushes in a row with a backlog make the store `degraded` (`flush_behind`), a failing one `flush_failing`. Data waiting is held in memory
+(bounded by `pending_mb`), and this node answers queries from it; other replicas see it when it is written.
+
+**Unchanging series.** A series whose value does not change (an idle port's counter at 0, a constant gauge) is not rewritten at every
+flush: it is written when its value changes, when its chunk is finished, and at most every `idle_heartbeat_seconds` (75) otherwise, and the
+chunk stores its values as runs when that is smaller. Every sample keeps its exact time and value, so a query returns the same points
+whether or not the series was compacted, and a rate over a flat counter is 0. A crash loses, for such a series, at most the repeats since the
+last write; another replica's view of it can be up to the heartbeat behind.
+
+**Raw window.** When the disk budget trims, the oldest raw chunks go first, so raw history can be shorter than `metric_raw_hours`.
+`raw_window` in the status gives the configured hours and the age of the oldest raw chunk actually on disk (`short` when the store is old
+enough to hold more), and queries use the rollups for older ranges.
+
+**PostgreSQL space.** Deleting chunks (retention, the disk budget) leaves free space inside the tables; PostgreSQL reuses it for new rows, but
+returns it to the operating system only after `VACUUM FULL` (which locks the table) or `pg_repack`. Autovacuum keeps the size steady, not smaller;
+the budget therefore limits the size the tables settle at. The chunk table keeps 20 % free space per page for in-place updates. Trimming is done in batches of 500
+rows with one statement each; partitioning the chunk table by time (so old data is dropped with `DROP TABLE`) is not done.
 
 ### Disabling
 
@@ -208,7 +330,12 @@ capped or cut alphabetically; `latest` announces a cut with `truncated`.
   Explorer and `query` keep every series; the Explorer adds the source to a line's name when an interface has more than one.
 - **Status codes.** Only ifOperStatus 2 is down. 3 (testing), 5 (dormant), 6 (notPresent), 7 (lowerLayerDown) and 4 (unknown) are
   states of their own (`oper_state`). `admin_up` is false only for ifAdminStatus 2. A device's `interfaces_down` counts neither
-  not-present nor administratively down ports (`interfaces_admin_down`, `interfaces_other`, `interfaces_unknown`).
+  not-present nor administratively down ports (`interfaces_admin_down`, `interfaces_other`, `interfaces_unknown`). Status unknown (4), a status
+  sample that is not current, and an interface that has counters but no status series at all are all counted in `interfaces_unknown` (an interface's status and counter series are matched by their `ifindex` label when they carry one, else by name),
+  so up, down, admin down, other and unknown add up to `interfaces_total`. An interface row says what its state rests on (`oper_basis`:
+  `reported`, `stale` or `none`) and whether it carries traffic (`carrying_traffic`), so an unknown port that is passing traffic reads
+  differently from an idle one.
+- **Interface order.** Names sort naturally (digit runs compare as numbers, letters without regard to case, case-only differences tie-broken for a stable order): `ethernet1/1/10`, `ethernet1/1/10:1`, `ethernet1/1/100`.
 - **Several nodes.** A node holds in memory only what it received. Two things complete the picture, in this order:
   1. *Peers.* When cluster peers are configured (`SESHAT_CLUSTER_PEERS`, SQLite or PostgreSQL alike) the table asks them for their heads
      (one `heads` call, merged per series by the newest sample), and a peer that does not answer makes the answer `partial`. A configured peer the cluster has marked down is not asked (it would hold the query for the peer timeout), but it is still named in `coverage.failed`, so `partial` stays true for as long as it is down.
@@ -315,7 +442,8 @@ at most 48 h), with the rate of the last interval for counters.
 - **Fleet-wide interface table**: `GET interfaces?site=&q=&status=up|down&sort=util&order=desc&limit=&offset=` returns one row per interface:
   oper and admin status, speed, in/out bits per second, in/out utilisation as a fraction of the speed, packet, error and discard rates, the
   newest sample and a `stale` flag (older than 10 minutes), with `total` for the pager. Rows without a value sort last in either direction.
-  `top` answers "busiest interfaces" and "most errors" for the same data.
+  `top` answers "busiest interfaces" and "most errors" for the same data. Internal router interfaces (`fti0`, `pfe-0/0/0`, ...) are left out
+  unless `include_internal=1` is sent (see "Internal interfaces").
 - **Device health page**: `GET devices/{device}` returns ICMP and SNMP reachability, round-trip time, loss, uptime, peak CPU and temperature,
   interface up and down counts and the last sample, and the list of metric paths the device has; `GET devices` is the same as a fleet list.
   The chart route draws any of those paths over time.

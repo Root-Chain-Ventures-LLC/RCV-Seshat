@@ -146,7 +146,8 @@ event carries it with the interface as the key. `host` comes from `host.name` (t
 Prometheus series (same name, same `host`, `interface` and `site` labels); only `seshat.metric.source` differs.
 
 **Turn it on per device** (Tracked devices, *Settings*, *Metrics*, or `PUT /api/tracker/devices/{id}` with
-`metrics_enabled`). The device must be tracked (enabled) and a metric binding must apply to it. It is off by default, so an
+`metrics_enabled`). The device must be tracked (enabled) or monitored (see *Monitoring without tracking* below), and a
+metric binding must apply to it. It is off by default, so an
 upgrade adds no polling.
 
 | Setting | Meaning |
@@ -165,6 +166,33 @@ site. Edges are served the effective settings with the device assignment, so a c
 `PUT /api/tracker/metrics/bulk` changes many devices at once: name `device_ids`, or a `selector` with a `site` (and optionally
 `role` and `class`), plus the settings to apply or `metrics_inherit`; with `"dry_run": true` it only counts (`matched`,
 `changed`, and the `skipped` devices with the reason: not tracked, no metric binding).
+
+**Monitoring without tracking.** Health metrics (CPU, memory, temperature, uptime, interfaces) and SNMP reachability do not
+need MAC tracking. A known device (from the inventory or adopted, with an address; a device the knowledge base only
+learned about is never monitored, whatever its site or its own switch says) is **monitored** when its site's entry says `"monitor": true`
+(`PUT /api/tracker/metrics/defaults`, the *Monitor untracked devices* switch of the editor; the interval and interface
+bounds of the entry apply) or its own switch says `"monitor": "on"` (`PUT /api/tracker/devices/{id}`, or in bulk);
+`"off"` keeps one out of a monitored site and `"inherit"` (empty) follows the site. A monitored device runs the metrics class (tracked or not: tracking it later does not switch its health polling off), and one that is not tracked
+runs the metrics class and the reachability probes, and **nothing else**: no FDB, ARP, neighbour or sighting collector
+runs, and the tracker class never lists it (`enabled` stays false; the effective state is `monitored`, with
+`monitor_inherited` when it came from the site). Everything else is as for a tracked device: one owner (server, edge or
+edge group member), the same lease, hand-over hold and fence, read-only SNMP, and one request budget per device address
+shared by every class. An edge is served such a device with `monitor_only` and the metrics settings in the same
+configuration (and etag) as its other devices. Reachability follows the site's reachability settings
+(*Settings*, *Reachability*): the probes must be on for the site, and with ICMP unavailable (the default container has no
+raw socket) they are SNMP-only. Tracked devices behave exactly as before; the monitor switch does not change them.
+An edge says in its heartbeat that it understands such devices; an edge that does not (an older release) is never served one, and an
+edge group never assigns one to a member that does not. The health source of a device whose edge is too old says `edge_too_old`
+with the edge's name and version.
+
+**Bulk.** `PUT /api/tracker/metrics/bulk` takes `"monitor": "on"|"off"|"inherit"` besides the metrics settings, and its
+selector narrows by `vendor` and `os` (case-insensitive, `*` matches any run) as well as `site`, `role` and `class`;
+`dry_run` counts without writing.
+
+**Why a device has no health.** `GET /api/tracker/health-source?device=NAME[&site=SITE]` (also the `health_source` member
+of `GET /api/metrics/device`) answers `status` `ok` or `none` and the reasons: `not_monitored`, `metrics_off`,
+`no_snmp_profile`, `no_binding`, `no_address`, `not_known`, `edge_too_old`, `not_in_inventory` (blocking: no health source), and `reachability_off`, `icmp_unavailable`,
+`last_poll_failed` (only part of it is missing). The Device health page shows them instead of an empty page.
 
 **What runs.** The *metrics class* is a second scheduler beside the tracker class. It runs only the metric collectors
 (the `metric` emit of the pack format), not the 10-minute tracker collectors, and has its own cadence, failures, backoff and pause

@@ -322,6 +322,10 @@
                     "alias": {
                       "type": "keyword",
                       "ignore_above": 1024
+                    },
+                    "name_source": {
+                      "type": "keyword",
+                      "ignore_above": 1024
                     }
                   }
                 }

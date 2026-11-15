@@ -105,10 +105,59 @@ until it reports again. Use `key: "{device_id}"` to alert per device rather than
 
 ### Trying a rule
 
-`POST /api/alerts/rules/dry-run` with `{"rule": {...}, "events": 5000}` runs a rule, saved or not, over the most recent
-events the event inspector keeps and returns what it would have done: the signals in order, how many identities would be
-open at the end. Nothing is written or sent. Absence rules cannot be tried. The inspector must be enabled
-(`SESHAT_INSPECT_RING`); it keeps at most 500 events per request here.
+`POST /api/alerts/rules/dry-run` with `{"rule": {...}}` runs a rule, saved or not, over recent events and returns what it
+would have done: the signals in order, how many identities would be open at the end, and how many events of each dataset
+were examined. Nothing is written or sent. Absence rules cannot be tried.
+
+Recent events come from a small in-memory ring **per dataset** (`SESHAT_DRYRUN_RING`, default 1000 events per dataset,
+0 to 5000, `0` turns the rings off; together they hold at most `SESHAT_DRYRUN_RING_MB` of memory, default 64 MiB, 1 to 4096,
+estimated from each event's size and shared evenly over at most 16 rings, so a ring of large events keeps fewer than its count and
+drops its oldest first; the high-volume `seshat.flow`, `seshat.flow_rollup`, `seshat.device`,
+`seshat.passthrough` and the engine's own `seshat.alert` documents are not kept). A busy dataset therefore never pushes
+the others out: an interface-down rule is tried against the traps even when the firewall's syslog is a thousand times
+louder. The rules' own dataset is used when the rule names one; a rule without one is tried against every dataset kept.
+The rings hold references to events under the pooled-event contract and are memory only; nothing is persisted.
+
+The scope is applied **before** the events are counted:
+
+| Field | Meaning |
+| --- | --- |
+| `datasets` | up to 8 dataset names, e.g. `["seshat.trap"]`, `seshat.syslog`, `seshat.reachability` |
+| `site`, `device` | only events of that site, or of that device (name, id, source address or host name) |
+| `window_minutes` | only events newer than this (for `source: "history"`, the span read: default 60, at most 1440) |
+| `events` | most events examined per dataset (default 2000, at most 20000) |
+| `source` | `recent` (default) or `history` |
+
+`events` counts per dataset (a run over three datasets may examine three times that), and `datasets` that leave out the
+rule's own dataset are called out in the answer's `note`. The `site` and `device` filters mean different things in the two
+modes: over recent events `site` is the device's inventory site, else the listener's site, and `device` matches the device's name or id, the
+host name, the sender address or the syslog host name; over stored history both are the exact site and device name of the
+metric series.
+
+The cost is bounded: at most 60000 events are looked at and the run stops after 8 seconds (the answer then says
+`truncated`). `source: "history"` replays the stored metric history (the [metric store](metrics-store.md)) of a
+threshold or state rule over the window: raw samples for a window of two hours or less, five-minute buckets beyond,
+at most 200 series and 100000 points; a state rule sees the stored numbers (enumerations as their codes), not text.
+Events have no queryable history in Seshat (they are forwarded to the destinations), so an event rule run with
+`source: "history"` says so and examines nothing.
+
+### Storm view
+
+`GET /api/alerts/storm?window=5&limit=10&dataset=seshat.trap` (window 1, 5 or 15 minutes) lists, per dataset, the
+busiest senders by event rate: address, device and site when known, count and rate over the window, total, last seen and
+the latest event name. The console shows it under **Alerts, Storm**. It is built from counters kept as events pass, not
+from stored events: 16 one-minute buckets per (dataset, sender address), at most 4096 senders per dataset and at most 12 datasets; memory only. When a dataset's table is full, senders idle for
+the whole 16 minutes are dropped and a newcomer replaces the weakest of a sample of eight (it inherits that sender's score,
+the space-saving algorithm), so a flood of spoofed one- and two-event addresses keeps replacing its own and cannot push out a
+sender that keeps sending; `evicted_senders` counts the replacements and the counts of a replaced sender are gone. Flow
+exporters are not counted here (their rates are on the flow input's statistics). For SNMP `authenticationFailure` traps the row also lists `requesters`: the address of whoever sent the bad
+request, where the agent says (the standard trap carries none, some vendors add a varbind). A varbind counts when its
+value is an address other than the sender and the agent address (not unspecified, loopback, multicast or broadcast) and either it
+has the type IpAddress or its MIB name says it is a source, client, manager or requester address (octet strings count only
+with that name); the proxy objects of SNMP-COMMUNITY-MIB (`1.3.6.1.6.3.18.1.*`) never count. `requester_from` names the
+varbind, with its OID. A trap without such a
+varbind leaves the field empty. The view shows sender addresses of every site, so it needs a caller that is not limited
+to some sites or tenants.
 
 ## Alert lifecycle
 
@@ -289,7 +338,8 @@ within its scope. Rules, silences, maintenance windows, policies and settings ar
 | `POST /alerts/bulk-ack` | acknowledge up to 200 alerts with one note (`ids`, `note`); one result per alert |
 | `GET /alerts/summary`, `/alerts/meta` | counts by severity and status; the vocabulary for building forms |
 | `GET/POST /alerts/rules`, `GET/PUT/DELETE /alerts/rules/{id}` | rules (with open and total alert counts) |
-| `POST /alerts/rules/dry-run` | try a rule against recent events |
+| `POST /alerts/rules/dry-run` | try a rule against recent events (scoped by dataset, site, device, window) or stored metric history |
+| `GET /alerts/storm` | top senders by event rate per dataset over 1, 5 or 15 minutes; `window`, `limit`, `dataset` |
 | `POST /alerts/preview` | which open alerts a silence or maintenance window being drafted would hold back |
 | `GET/POST /alerts/silences`, `GET/PUT/DELETE /alerts/silences/{id}` | silences (`?all=true` includes ended ones) |
 | `GET/POST /alerts/maintenance`, `GET/PUT/DELETE /alerts/maintenance/{id}` | windows, with `active` and `next_start` |

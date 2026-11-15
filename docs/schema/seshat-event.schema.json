@@ -4722,6 +4722,9 @@
             },
             "alias": {
               "type": "string"
+            },
+            "name_source": {
+              "type": "string"
             }
           },
           "additionalProperties": false
