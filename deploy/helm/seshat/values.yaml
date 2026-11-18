@@ -210,6 +210,34 @@ ui:
     #   - secretName: seshat-tls
     #     hosts: [seshat.example.com]
     tls: []
+  # With several replicas an edge's stream requests would be spread over all of them by the ingress, and every
+  # replica would then write its own copy of the edge's metric series (docs/ha.md, "Edge streams"). This second
+  # Ingress carries only /api/edge/ and pins each edge to one replica by hashing a request header the edge sends
+  # (X-Seshat-Edge), through a Service of its own so the controller keeps a separate upstream for it. The replicas
+  # also hand a request to the node that holds the edge's control channel when cluster.enabled, which makes the
+  # result right behind any load balancer; this just saves the extra hop and keeps it right when the peers are down.
+  edgeIngress:
+    # auto: rendered when ui.ingress.enabled and more than one replica takes the UI/API (replicaCount, or
+    # console.replicaCount with roles.split). true / false force it (it still needs ui.ingress.enabled).
+    enabled: auto
+    path: /api/edge/
+    className: ""             # empty: ui.ingress.className
+    hosts: []                 # host names; empty: the hosts of ui.ingress
+    tls: []                   # empty: ui.ingress.tls
+    # The request header that selects the replica. The edge sends X-Seshat-Edge on every request.
+    hashHeader: X-Seshat-Edge
+    # The ingress-nginx annotation nginx.ingress.kubernetes.io/upstream-hash-by: "$http_x_seshat_edge". auto: added when
+    # the class name (edgeIngress.className, else ui.ingress.className) is empty (ingress-nginx is the usual default
+    # class) or contains "nginx"; true / false force it. An upstream-hash-by you set in annotations is kept. Another
+    # controller (Traefik, HAProxy, Contour, a cloud load balancer): put its "hash on this header" setting in annotations,
+    # or on the Service.
+    nginxHash: auto
+    # Start from the annotations of ui.ingress (body size, timeouts, ssl-redirect, backend-protocol, auth, cert-manager,
+    # ...): a controller takes those per location from the Ingress that owns it, so without them /api/edge/ would run on
+    # the controller's defaults (a 1 MB body limit, 60 s timeouts). annotations below are added over them.
+    inheritAnnotations: true
+    annotations: {}
+    serviceAnnotations: {}
 
 # Needs CAP_NET_RAW (an NMS destination with preserve_source): the container then runs as root with every
 # other capability dropped, as docs/outputs.md describes.

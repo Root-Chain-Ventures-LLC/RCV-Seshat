@@ -190,6 +190,22 @@ helm upgrade seshat deploy/helm/seshat --reuse-values \
   --set cluster.enabled=true --set cluster.secret.existingSecret=seshat-cluster
 ```
 
+- With more than one replica and `ui.ingress.enabled`, the chart also renders a second Ingress and a Service of its
+  own for `/api/edge/` (`ui.edgeIngress`, `auto` by default). For ingress-nginx it carries
+  `nginx.ingress.kubernetes.io/upstream-hash-by: "$http_x_seshat_edge"`, so every request of one edge reaches the same
+  replica and each series has one writer; without it the ingress spreads an edge's stream over all replicas and each
+  one writes its own copy of the edge's series. The Service is separate because ingress-nginx keeps one upstream per
+  Service and applies the hash annotation to it. Hosts and TLS default to those of `ui.ingress`, and so do its annotations
+  (`ui.edgeIngress.inheritAnnotations`, on by default; `ui.edgeIngress.annotations` win): the controller takes body
+  size, timeouts, `ssl-redirect`, `backend-protocol`, authentication and similar per location from the Ingress that owns
+  it, so without them `/api/edge/` would run on the controller's defaults. The hash annotation is added when the class
+  name is empty (the usual default class is ingress-nginx) or contains `nginx` (`ui.edgeIngress.nginxHash: auto`; `false`
+  if your default class is another controller), unless you set your own `upstream-hash-by` in the annotations. For another
+  controller put its "hash on the `X-Seshat-Edge` header" setting in `ui.edgeIngress.annotations` (and
+  `serviceAnnotations`). `helm upgrade` NOTES say whether the Ingress hashes, and warn when several replicas have no
+  per-edge routing at all. With `cluster.enabled` the replicas also hand a request to the
+  node that holds the edge, so the result is right behind any ingress
+  ([Edge streams](ha.md#edge-streams-one-writer-per-series)). Turn the Ingress off with `ui.edgeIngress.enabled=false`.
 - Every replica gets the same peer list, one URL per replica from `replicaCount`, and advertises its own name, both
   by the headless Service: `http://<pod>.<release>-seshat-headless.<namespace>.svc:8080`. A replica skips its own
   entry. Change the replica count with `helm upgrade`: `kubectl scale` leaves the list behind.

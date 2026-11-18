@@ -266,8 +266,40 @@ node. A machine that really died takes its addresses with it.
 2. Stop it, upgrade the image or binary, start it. Migrations run once, under a lock, and they are
    additive within a release train; check the release notes before mixing versions for long. In SQLite
    mode the two nodes stay in sync across the versions ([hash schema](#rolling-upgrades-and-the-sync-hash-schema)).
+   Metric history on a shared PostgreSQL (0.10.0 to the release with migration 0325): the series' last-sample time moves to a new
+   table. A 0.10.0 node reads only the old column; while it is in the cluster the new nodes keep that column at most about 5 minutes
+   behind (3-minute step), so it never shows a live series as stale, and they go back to one write an hour once it is upgraded
+   (docs/metrics-store.md, "Last sample").
 3. Wait until its row shows `active` and, in SQLite mode, the Cluster page shows the peer `in sync`.
 4. Repeat for node-a. (With preemption the address returns to the preferred node on its own.)
+
+### Rolling upgrade from 0.10.0: the metric history's open chunks
+
+From the release after 0.10.0 the metric store writes an open chunk's new samples to a new table (`metric_tail`, migration 0326) instead of
+rewriting the whole chunk row at every flush ([docs/metrics-store.md](metrics-store.md), "The write path and its WAL cost"). The migration only
+adds tables, so a 0.10.0 node keeps working on the upgraded database, and the new nodes read everything 0.10.0 wrote. While both versions
+run against one PostgreSQL:
+
+- **A 0.10.0 node does not read tail rows.** For a series that a *new* node receives it sees the closed chunks (every hour that is over,
+  at every resolution) and not the part still open: the last hour of raw samples, up to six hours of 5-minute buckets and up to a day of
+  1-hour buckets of that node's open chunks are missing from its answers until the chunk closes (the new node then writes the whole
+  row). Series the 0.10.0 node received itself are answered from its own memory, complete, as always. The merged answers (ranges, rates,
+  top-N) therefore show a gap at the newest end for data held only by new nodes; the older data is whole.
+- **What it never does** is return a wrong value or fail: it reads fewer rows, with no error. The latest-value reads (the fleet table, the
+  device summaries) of a 0.10.0 node show such a series as unknown, or, in the first part of a new hour, with the value of the last
+  closed chunk marked stale (older than the freshness bound); never as current. The node's own flush, retention and disk budget are unaffected.
+- **Closing is a little later.** A head is closed by the clock two flush intervals after its window ends if no sample arrived for it in that
+  time, so the whole chunk of a window reaches a 0.10.0 node about a minute later than before; for a device whose clock runs behind and keeps
+  delivering samples of the ended window, up to an hour later.
+- **The other direction is complete.** A new node reads the rows a 0.10.0 node wrote, including open chunk rows rewritten at every flush: they are
+  chunk rows like any other, and the new node continues the series beside them (a restart or an upgrade in place starts a new run, whose
+  chunk is merged with the earlier run's by time, as for any restart).
+- **To keep a 0.10.0 node's view whole during the rollout**, set `SESHAT_METRICS_OPEN_CHUNKS=rewrite` on the new nodes until the last 0.10.0
+  node is gone, then remove it. A node with it writes whole open chunks as 0.10.0 did (and none of the WAL saving); it still reads tail rows
+  and folds those a former run left. Mixed nodes need nothing else.
+- **A rollback** to 0.10.0 leaves the tail rows of the last run of each node unread: the open hour of data is missing in 0.10.0's answers until
+  the next upgrade, when the node folds those rows into chunk rows at its first start (nothing is lost). Retention of a 0.10.0 node does not
+  delete tail rows; the new release removes them.
 
 ## What is shared, SQLite versus PostgreSQL
 
@@ -377,6 +409,94 @@ the edge's control connection the client gets `edge_offline`.
   address), or configure the peers.
 - Sessions do not survive the loss of a node: the client's connection ends and the audit entry says
   `edge_dropped`.
+
+### Edge streams: one writer per series
+
+An edge's stream requests (`POST /api/edge/v1/stream`) go wherever the load balancer sends them, so with several
+nodes consecutive requests of one edge land on different nodes. Every node that takes a sample of a series builds
+its own open chunk of it and writes it (the [metric store](metrics-store.md) keys a chunk by node, so the copies do
+not collide): with N nodes taking an edge's stream, its series are written N times, and the database sees N times the
+rows, the updates and the write-ahead log. Each series should have one writer.
+
+**What the server does.** The node that holds the edge's control connection is the edge's *owner*. A node that
+receives a stream request for an edge it does not hold asks its peers who does (the same question the relay asks,
+answered from a short per-edge cache) and, if the owner is a node of this release, passes the request to it over the
+signed peer protocol: the body as received (compressed, at most 8 MiB; a bigger one is taken where it arrived), in a
+body the cluster layer has signed. The owner takes it as if it had arrived there (same lock, same decoding, same
+sequence check, same pipeline), and its answer is what the edge gets: `accepted`, `duplicates`, `rejected` and
+`last_seq` are the owner's, and an owner that is busy answers 503 with `Retry-After` as it would to the edge. The
+forwarding node does no decoding and no enrichment; forwarding is per request, in the stream handler, and nothing
+runs in the pipeline for it.
+
+**Accept everything, block nothing.** A request is taken on the node that received it, whatever the reason, when
+nobody holds the edge's control connection (the edge is reconnecting), when the holder is a node of release 0.10.0
+(it does not know the forwarded request, so it never gets one; the holder question is answered with the header
+`X-Seshat-Stream-Fwd: 1` by nodes that do), when the owner does not take the request within three seconds (a request
+it did not take is not processed there: it sees the connection close), when the owner answers with an error before it
+started, or when the body is over 8 MiB. Data is never dropped or refused because a peer is down. While that lasts the
+edge's series have more than one writer again (as before this release), and the counters below say so. A forwarded
+request is never forwarded again; one that reaches a node that does not hold the edge is taken there. One failure is
+not retried locally: an owner that took the request and then failed (its node died mid-request) gets the edge a
+`502 peer_failed`, because part of the batch may be processed already. Delivery is therefore **at least once** in that
+case: the owner writes the edge's sequence mark at the end of a request, so the edge's resend after such a failure
+repeats the events the dead owner had already handed on. The same holds for a node that dies mid-request without any
+forwarding. An owner that is busy with the edge's previous request answers `503 busy` with `Retry-After`, which the
+edge retries; the forwarding node does not take the request itself while the owner is working on the edge's stream.
+The forwarder's three-second bound covers the transfer of the body to the owner and the owner's first reaction, not the
+owner's wait for the edge's lock.
+
+**Sequence and duplicates.** The edge's sequence mark is kept per node in memory and per edge in the shared database,
+which a node advances before it answers. Before this release a node compared a batch with the mark it had loaded the
+first time it saw the edge, so with requests alternating between nodes a batch resent after a lost answer was judged
+against a stale mark on the other node (its events were taken again), and a node that sat out more than 200 000
+sequence numbers refused the next batch as an implausible jump. A node now reads the stored mark of the edge on every
+request (it is already part of the edge row it authenticates against) and uses the higher of the two. The two other
+per-edge numbers that decide whether a record is plausible are on the edge's row for the same reason: an armed
+`POST /api/edges/{id}/resync` and the sequence numbers the edge declared dropped in its heartbeats (`drop_budget`), so
+they take effect on the node that takes the stream, whichever node the operator's request or the heartbeat reached. With
+forwarding the owner sees every request, so this only matters while a request is taken somewhere else (the fallbacks
+above).
+
+**Peer links.** The batch crosses the link between the nodes as the edge sent it (compressed, inside the edge's own
+TLS to the receiving node only, not to the owner), so it needs the same permission as the relay: `https://` peer URLs
+or a private segment with `SESHAT_CLUSTER_ALLOW_PLAIN_RELAY=1`. Towards a plain `http://` non-loopback peer without
+it the node cannot even ask who holds the edge, and takes every request itself.
+
+**What it does not do.** It does not move the edge's control connection, and it does not elect owners: the owner is
+wherever the edge's control request landed, and moves when the edge reconnects (the series then have two writers
+for as long as the old node's open chunks last, as before). It needs the peer protocol (`SESHAT_CLUSTER_PEERS` and
+`SESHAT_CLUSTER_SECRET`); without peers every node takes what it gets. During a rolling upgrade from 0.10.0 a 0.10.0
+node never receives a forwarded request and a new node never forwards to it, so the edges held by 0.10.0 nodes keep
+writing from whichever node the load balancer picks until their node is upgraded.
+
+**Observing it.** `seshat_edge_stream_requests_total{result}` on every node: `local_owner` (this node holds the edge),
+`forwarded` (handed over and answered by the owner), `received_forwarded` and `received_misdirected` (taken here for
+another node; the second means this node no longer held the edge), the fallbacks `local_no_holder`,
+`local_unsupported_peer`, `local_owner_unreachable`, `local_oversize`, `local_peer_link_refused` (the link to a peer is plain
+http and not allowed; logged once per peer per ten minutes), and `forward_failed`. The fallbacks should stay
+near zero with a healthy cluster; a steady rate means some edges have more than one writer. `GET /api/edges` carries
+`throughput.stream_forwarded_per_min` and `throughput.stream_local_fallback_per_min` per edge.
+
+**Pin an edge to one node at the load balancer as well.** A balancer that hashes on the edge's id sends all of its
+requests to one node, so forwarding is rarely needed (and the answer stays right when the peers are down). Every edge
+request carries `X-Seshat-Edge: <edge id>`. On Kubernetes the Helm chart renders a separate Ingress for `/api/edge/`
+that does this for ingress-nginx (`ui.edgeIngress`, on by default when there are several replicas; see
+[kubernetes.md](kubernetes.md#several-replicas-and-edges)). Elsewhere:
+
+- nginx: `upstream seshat { hash $http_x_seshat_edge consistent; server ...; }` for `location /api/edge/`.
+- HAProxy: `balance hdr(X-Seshat-Edge)` (with `hash-type consistent`) in the backend that serves `/api/edge/`.
+- Envoy / Contour: a `ring_hash` or `maglev` load balancing policy with the hash policy on the header `x-seshat-edge`.
+- A cloud load balancer that can only hash the source address still works: an edge's requests come from one address.
+
+Hashing on the source address works too (an edge's requests come from one address), but it pins badly behind NAT or a
+shared egress: many edges behind one address all land on one node. Prefer the header. The hash is also worth setting
+because forwarding costs a hop: the batch (compressed, up to 8 MiB) crosses the link between the nodes and is held in
+memory on the receiving node while it does, and the owner's answer comes back the same way, so with N nodes and no
+hash about (N-1)/N of an edge's volume takes that extra trip.
+
+A hash on the header does not need the nodes to agree on anything and survives a node leaving (consistent hashing
+moves only the edges that were on it). It is an optimisation: forwarding is what makes the result right whatever the
+balancer does.
 
 ### SNMP reads across nodes
 

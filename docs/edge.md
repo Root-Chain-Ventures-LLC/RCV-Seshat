@@ -160,6 +160,14 @@ the reply carries the dedup mark and a hint when a new configuration or a certif
 exactly the devices its events are looked up in) and the
 public `GET /ca`. `config`, `packs` and `kb/snapshot` honour `If-None-Match` and answer `304`.
 
+### With several server nodes
+
+The stream of an edge is taken by the node that holds its control connection: another node that receives a request
+hands it over (signed peer protocol) and relays the owner's answer, and takes it itself when the owner cannot be
+reached, so nothing is ever refused. This keeps each series on one writer instead of one per node. The edge needs
+nothing for it; it sends `X-Seshat-Edge` with its id on every request, which a load balancer can hash on to pin the
+edge to one node. Details, counters and balancer settings: [ha.md](ha.md#edge-streams-one-writer-per-series).
+
 ## The passthrough stream through an edge
 
 An input can ship the original message untouched beside the enriched event ([the passthrough

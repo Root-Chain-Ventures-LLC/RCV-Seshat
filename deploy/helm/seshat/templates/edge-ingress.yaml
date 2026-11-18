@@ -1,0 +1,82 @@
+{{- /*
+  One writer per series (docs/ha.md, "Edge streams"): /api/edge/ gets its own Ingress and Service, with the ingress
+  controller hashing on the edge's id header so each edge's stream requests reach the same replica.
+*/}}
+{{- $e := .Values.ui.edgeIngress }}
+{{- $replicas := ternary .Values.console.replicaCount .Values.replicaCount .Values.roles.split | int }}
+{{- $on := $e.enabled }}
+{{- if eq (toString $on) "auto" }}
+{{- $on = gt $replicas 1 }}
+{{- end }}
+{{- if and $on .Values.ui.ingress.enabled }}
+{{- $uiComponent := ternary "console" "collector" .Values.roles.split }}
+{{- $className := default .Values.ui.ingress.className $e.className }}
+{{- $tls := default .Values.ui.ingress.tls $e.tls }}
+{{- /* The controller reads proxy-body-size, timeouts, ssl-redirect, backend-protocol, auth and the like from the Ingress that owns the location, so this one starts from ui.ingress.annotations (edgeIngress.annotations win), then gets the hash. */}}
+{{- $ann := dict }}
+{{- if $e.inheritAnnotations }}
+{{- $ann = deepCopy (default (dict) .Values.ui.ingress.annotations) }}
+{{- end }}
+{{- $ann = merge (deepCopy (default (dict) $e.annotations)) $ann }}
+{{- $hash := $e.nginxHash }}
+{{- if eq (toString $hash) "auto" }}
+{{- $hash = or (not $className) (contains "nginx" (lower $className)) }}
+{{- end }}
+{{- if and $hash (not (hasKey $ann "nginx.ingress.kubernetes.io/upstream-hash-by")) }}
+{{- $_ := set $ann "nginx.ingress.kubernetes.io/upstream-hash-by" (printf "$http_%s" (lower (replace "-" "_" $e.hashHeader))) }}
+{{- end }}
+{{- $hosts := list }}
+{{- if $e.hosts }}
+{{- $hosts = $e.hosts }}
+{{- else }}
+{{- range .Values.ui.ingress.hosts }}{{ $hosts = append $hosts .host }}{{ end }}
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "seshat.fullname" . }}-edge
+  labels:
+    {{- include "seshat.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ $uiComponent }}
+  {{- with $e.serviceAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "seshat.selector" (list . $uiComponent) | nindent 4 }}
+  ports:
+    - {name: http, port: {{ .Values.ui.service.port }}, targetPort: http, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "seshat.fullname" . }}-edge
+  labels:
+    {{- include "seshat.labels" . | nindent 4 }}
+  {{- if $ann }}
+  annotations:
+    {{- toYaml $ann | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with $tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range $hosts }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          - path: {{ $e.path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "seshat.fullname" $ }}-edge
+                port: {name: http}
+    {{- end }}
+{{- end }}

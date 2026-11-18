@@ -149,7 +149,10 @@ helm -n seshat install seshat deploy/helm/seshat \
 ```
 
 The chart never creates Secrets, certificates or the database. Walkthrough, values and troubleshooting:
-[`docs/kubernetes.md`](docs/kubernetes.md).
+[`docs/kubernetes.md`](docs/kubernetes.md). With more than one replica and an ingress, the chart also renders an
+Ingress for `/api/edge/` that pins each edge collector to one pod, so each series has one writer
+([`docs/ha.md`](docs/ha.md)). The metric history writes to the shared PostgreSQL: size its WAL and backups as
+[`docs/metrics-store.md`](docs/metrics-store.md) describes.
 
 ## Verify what you downloaded
 

@@ -32,12 +32,14 @@ a dataset check and one non-blocking channel send; it never parses, allocates or
 events) drops the event and counts it (`queue_dropped`). Everything else happens on three goroutines:
 
 1. the **aggregator** extracts samples and appends them to the open chunk of the series, and to the open rollup buckets;
-2. the **writer** wakes every `flush_seconds` (default 30), copies the open chunks that changed and writes them, in transactions of at
-   most 500 rows, as upserts. A failed transaction puts its rows back for the next flush;
+2. the **writer** wakes every `flush_seconds` (default 30) and writes what is new: finished chunks as chunk rows (upserts), and for an open
+   chunk only the samples it gained since the previous flush, as insert-only tail rows (see "The write path and its WAL cost"), in
+   transactions of at most 500 rows. A failed transaction puts its rows back for the next flush;
 3. the **refresher** re-reads settings, retention and the series list every 30 s.
 
-**Durability bound.** Open chunks live in memory. A crash (or kill -9) loses the samples that were not yet flushed: at most
-`flush_seconds` of data, plus whatever is still in the intake queue (a few seconds at the rates the queue is sized for). A clean
+**Durability bound.** Open chunks live in memory, and their flushed part also in tail rows. A crash (or kill -9) loses the samples that were not yet flushed: at most
+`flush_seconds` of data, plus whatever is still in the intake queue (a few seconds at the rates the queue is sized for); what was flushed is
+kept (the node folds its tail rows into chunk rows when it starts again). A clean
 stop drains the queue (every event accepted before the stop is appended) and writes everything, rollup buckets still filling included
 (`TestStopDrainsTheQueueAndWritesEverything`). Rollup buckets are written when they close (every 5 minutes and every hour); a crash
 also loses the 5-minute and 1-hour bucket that were still filling, but not the raw samples, which are flushed, so a bucket can be
@@ -77,7 +79,9 @@ or 128 KiB, whichever comes first, so no chunk grows past what can be read back;
 | table | one row per | holds |
 |---|---|---|
 | `metric_series` | series | key, device, site, tenant, path, interface, labels, source, kind, counter width, first and last time |
-| `metric_chunk` | series, resolution, chunk, writer | a compressed block of samples (raw) or buckets (5m, 1h) |
+| `metric_chunk` | series, resolution, chunk, writer | a compressed block of samples (raw) or buckets (5m, 1h): a chunk as it was when it closed |
+| `metric_tail` | group of 64 series, resolution, window, writer, flush | the samples (raw) or closed buckets (5m, 1h) that open chunks gained in one flush, insert-only (migration 0326) |
+| `metric_tail_win` | writer, resolution, window | which windows a writer has tail rows in, so rows a dead writer left are found |
 
 A chunk row covers up to 1 hour of raw samples (less when it was closed at its size bound), 6 hours of 5-minute buckets or 24 hours of
 1-hour buckets. The key includes the writing
@@ -106,19 +110,116 @@ forever"; a metric field of 0 would mean "forever" to one reader and "delete" to
 policy is replaced by the default and never deletes anything. The upper bounds are 744 hours and 3650 days. Retention deletes whole chunk rows
 that started more than one chunk span before the cut (so a resolution keeps up to one chunk span more than configured), 1 000 rows per
 statement with a short pause between statements, so it never holds SQLite's write lock long enough to stall other writers. A series whose
-chunks are all gone and that has not been seen within the longest retention is removed too.
+chunks are all gone and that has not been seen within the longest retention (in either of its two last-sample times) is removed too, with its
+`metric_series_seen` row.
 
 A resolution is **switched off** with its own store setting (`raw_enabled`, `rollup_5m_enabled`, `rollup_1h_enabled`, all on by default):
 nothing is written at it, queries refuse it, and what is stored ages out by its retention.
 
-`metric_chunk` is indexed on `(res, start_ms)`, not on the end time. Every flush rewrites the open chunk's end time, and an index on a
-column that changes defeats PostgreSQL's heap-only updates and bloats the index; the start time never changes. The table keeps 20 %
-free space per page (`fillfactor = 80`) so those upserts can stay on their page (migration 0321).
+`metric_chunk` is indexed on `(res, start_ms)`, not on the end time. A chunk row is rewritten while its chunk is open when the node writes
+whole open chunks (`SESHAT_METRICS_OPEN_CHUNKS=rewrite`, the 0.10.0 write), and an index on a column that changes defeats PostgreSQL's
+heap-only updates and bloats the index; the start time never changes. The table keeps 20 % free space per page (`fillfactor = 80`) so
+those upserts can stay on their page (migration 0321).
 
-**Last sample.** Each series row carries the time of its last sample (`last_ms`, *not* the end of a chunk, which for a rollup is later). It is
-written in batches every 2 minutes for the series that changed (and at a clean stop), and other replicas and a restart read it: the refresh
-selects only the rows changed in the last 20 minutes (an index on it, migration 0322), so there is no scan of the chunk table and no
-per-series work at start. "Stale" and the revival of an idle series derive from it, accurate to within a few minutes.
+### The write path and its WAL cost
+
+A database that logs its writes pays for every row a flush writes. In 0.10.0 each flush upserted the **whole open chunk** of every series
+that changed: a raw chunk is open for up to an hour, so its row was rewritten about 120 times at the default flush interval, each time with
+all the samples so far, and on PostgreSQL every rewrite logs the whole row (and the first change of a page after a checkpoint logs the whole
+page). The write is now:
+
+1. **Open chunks: tail rows.** A flush appends to `metric_tail` only the samples (raw) or closed buckets (5m, 1h) a chunk gained since the
+   previous flush. Rows are insert-only and never updated. One row holds the new samples of up to 64 series (series id / 64) that share a
+   chunk window, so a flush of 20 000 series is a few hundred small rows, not 20 000, and the rows of one series stay close together for readers.
+2. **Closed chunks: one chunk row.** When a chunk closes (its hour is over, it reached its size bound, or the node stops) its whole row is
+   written to `metric_chunk`, exactly as before. Once every open chunk and every finished chunk of a window of this writer is written, the
+   writer deletes its tail rows of that window in short transactions of their own. A chunk row is therefore written once per chunk; the tail
+   rows exist for at most about an hour (a raw window), 6 hours (5m) or a day (1h).
+3. **Readers merge.** A query, the fleet table and the latest-value reads (`DBHeads`) read the tail rows of the other writers together with
+   the chunk rows and merge them by time per writer, so a sample that is in both (a chunk is closed and its tail rows are not yet deleted) is
+   one sample. A tail row is committed in the flush that wrote it: the 30 s visibility of fresh samples, also to the other nodes, is unchanged.
+4. **Crashes.** Tail rows are the flushed part of an open chunk. A node that died leaves them; when the same node starts again it folds the
+   tail rows of its earlier runs into chunk rows (the chunk of that run is then what 0.10.0 would have left), and the leader does the same for
+   any writer's windows that ended more than two hours ago. A chunk row is never replaced by one with fewer samples (no chunk write is, and a fold only adds). Tail rows that cannot be read (a
+   format of a newer release) are left in place. A series whose chunk was dropped without being written (the database refused the series, or
+   the pending list was full) has what it had flushed, and the rollup buckets it held in memory, folded into a chunk row before the window's tail
+   rows are deleted; a series that is taken again inside the same window opens a chunk of its own, so both are read. Rows that could not be
+   folded keep the window's registration, and the full refresh (every five minutes) tries them again once the window has been over for two hours. Nothing is lost that
+   0.10.0 would not have lost.
+5. **Outages and fast sources.** A head remembers at most 256 samples (64 buckets) that are not in the database. When the database was away
+   for longer, the next write of that head is its whole chunk, which covers them (the 0.10.0 write), so memory per series stays bounded. A
+   source that delivers more than about 8 samples a second to one series (256 in a 30 s flush) overflows that bound at every flush and is
+   written as a whole chunk each time: no saving for it, and no loss.
+6. **Late samples.** A head whose window has ended waits until no sample was taken for it for two flush intervals (at most an hour) before
+   its chunk is closed by the clock, so a device whose clock runs behind and keeps delivering samples of the window joins the same chunk.
+   A sample stamped inside a window whose chunk this run has already closed (it arrived after that) is kept as a chunk of its own beside the closed one, and a chunk write never replaces a row that holds more samples; in
+   0.10.0 it replaced the whole closed chunk with a one-sample chunk. Readers merge the chunks of a window by time (raw) or combine their
+   buckets (5m, 1h).
+7. **Latest values of series another node holds.** `DBHeads` reads, per batch of series (grouped by age of last sample and by id, so a
+   batch touches a few groups), the tail rows of the last two flush intervals; a series that reports less often than that is read again
+   from the tail rows of the last 45 minutes (polls up to 20 minutes apart; at most 10 000 such series per read). A series polled less often
+   still shows its newest value from another node, without a rate.
+
+Tail rows count in the disk estimate and are removed by retention like chunks (a window older than the retention cut). The SQLite-to-
+PostgreSQL copy tool carries them. The code is the same on SQLite and PostgreSQL; on SQLite the saving is in bytes written to the file.
+
+**What it costs.** `TestMeasureWALOfChunkWrites` writes synthetic counter series, one sample per
+10 s each, flushed every 30 s, into a PostgreSQL for one steady-state hour (the close of the previous hour's chunks and their cleanup, and
+the growth of the next hour's) and reads the WAL position before and after, with a checkpoint every five simulated minutes and a vacuum at
+the end. For 20 000 series (checkpoint every 5 minutes, a vacuum at the end; `wal_compression` off):
+
+| write | WAL per hour | per series and hour | rows written | full-page images |
+|---|---|---|---|---|
+| 0.10.0: whole open chunk at every flush | 2 810 MB | 140 KB | 2 660 000 | 105 000 |
+| tail rows, series of a device sampled together | 178 MB | 8.9 KB | 61 000 | 10 500 |
+| tail rows, every series sampled at its own instant | 215 MB | 10.8 KB | 61 000 | 13 700 |
+
+That is 13 to 16 times less WAL for the chunk writes. The figures are from a synthetic load (rising counters, 20 000 series, one sample per
+10 s each, flush every 30 s) on a throwaway PostgreSQL 16 and will differ with your data, sample rate and settings; run the test on your
+own server to get yours (`TEST_WAL_DATABASE_URL`, `SESHAT_WAL_SERIES`, `SESHAT_WAL_TIMES`, `SESHAT_WAL_CHECKPOINT_FLUSHES`; see its comment).
+
+Rows written fall by more than 40 times (a flush of 20 000 series is a few hundred rows), and the saving is larger when checkpoints are more
+frequent, because a full-page image follows the first change of a page after each one and the tail rows are written to the end of the table
+and to a few hot index pages.
+
+**Last sample.** Each series has the time of its last sample (not the end of a chunk, which for a rollup is later). Other replicas and a
+restart read it, and "stale", the idle state of a series and its revival derive from it, accurate to within a few minutes. It lives in
+two places, and a reader takes the newer of the two:
+
+- `metric_series_seen (series_id, last_ms)` (migration 0325) holds the frequent value: a narrow table with no index but its primary key and a
+  fillfactor of 70, so on PostgreSQL the updates are heap-only (HOT) and write one small row version instead of every index of the wide series row.
+- `metric_series.last_ms` holds a coarse value. It is written when the series row is created, when it is behind the series' last sample by
+  the step below, and (because an idle series' stored time is days behind) in the first round after an idle series is revived. It stays indexed
+  (`metric_series_last`, migration 0322) because the bounded start-up read orders by it, the retention test uses it, and nodes of the previous
+  release read it; so it is kept rare, not removed. Dropping the index is a contract-shaped migration and waits for a release that no longer has to
+  work next to 0.10.0.
+
+Every `lastSeenEvery` (2 minutes) a node writes the series that changed, in batches, and at a clean stop. A node writes a series only when its own
+time is at least 90 seconds ahead of what the database holds (a stop writes anything that is ahead), so the stored time is at most about 90 seconds
+plus one round (3.5 minutes) behind the series' last sample. It reads the stored times of the batch just before writing (no locks, so no WAL): replicas
+that all receive the same series therefore write it about once per interval between them instead of once each. The write itself is an `UPDATE`
+that matches only rows that are behind (a row it does not change is not locked and logs nothing) and an `INSERT ... ON CONFLICT DO NOTHING` for a
+series with no row yet; a series whose row another node's retention removed is skipped. The refresh selects the rows of both places changed in the
+last 20 minutes; the narrow table is read without an index (it is small and read-only work), and the refresh also tells the node what is stored so it does
+not write it again. There is no scan of the chunk table and no per-series work at start.
+
+**The coarse step and a rolling upgrade from 0.10.0.** A 0.10.0 node reads only `metric_series.last_ms`, and calls a series stale after 10
+minutes (`StaleAfter`). Every node of a cluster on a shared PostgreSQL therefore advertises the feature `metric_series_seen` in its heartbeat
+(`cluster_nodes`, `features`); a node of 0.10.0 does not. The step of the coarse column follows what the cluster says:
+
+| cluster (heartbeats newer than 5 minutes) | step of `metric_series.last_ms` |
+|---|---|
+| every node advertises the feature, or this is the only node, or SQLite | 1 hour |
+| a node that does not advertise it is running (or membership cannot be read, until it has been read once) | 3 minutes |
+
+The 3 minutes is chosen so that a live series never reads stale on an old node: 3 minutes of step + one write round (2) + the old node's refresh (30 s)
++ the old node's database-head re-read lag (150 s) is 8 minutes, under the 10 minutes of `StaleAfter`. During the mix the column is written about
+every 3 minutes for a series that reports steadily (once between the replicas), so the write volume of that column falls from 3 nodes x every 2 minutes to
+one write per 3 minutes, and falls to once an hour when the last 0.10.0 node is upgraded (within a refresh, 30 s, after its heartbeat is older than 5
+minutes or it reports the feature). A series that was idle and reports again on a newer node is written to the column in its first round, so the old node
+revives it within its 20-minute window. An old node does not read `metric_series_seen`, and its own writes keep updating `metric_series.last_ms`
+as before (a newer node reads both). Rolling back (a 0.10.0 node joining a cluster of new nodes) can show live series as stale on that node for a few minutes, until the new nodes see its heartbeat (at their next refresh, 30 s) and catch the column up at the 3-minute step. A 0.10.0 node that has no heartbeat in `cluster_nodes` cannot be seen by the new ones: do not run one
+beside new nodes without the cluster heartbeat (it is on by default).
 
 ### Caps and the disk budget
 
@@ -151,7 +252,7 @@ wants to see. After `series_idle_days` without a sample a series therefore leave
 (no open chunks, no pending data), but stays in the series list as a small metadata entry (about 400 bytes). At most 200 000 idle entries are
 kept: when the list is full, entries of devices the device inventory does not know (stray or spoofed exporters) go first, then the ones with the
 oldest last sample; a restart loads series newest first. Their chunks stay until retention removes them. It is returned by `series`, `labels`, `devices` and range queries
-with `"idle": true`, and `status` counts it as `idle_series`. The entry's last-sample time is the series row's `last_ms`. A new sample **revives** it: it takes a slot like a new series (refused if a cap is reached), carries on
+with `"idle": true`, and `status` counts it as `idle_series`. The entry's last-sample time is the newer of the series row's `last_ms` and `metric_series_seen.last_ms`. A new sample **revives** it: it takes a slot like a new series (refused if a cap is reached), carries on
 from the newest sample it has stored, and anything not newer than that is dropped as out of order, so the revived series cannot overlap its
 history. A restart lists idle series again without counting them. When retention removes the last chunk and the series row, the entry goes.
 
@@ -253,9 +354,27 @@ replicas, and a node's own part is `series_this_node`. On SQLite each node has a
 (`series_cap_scope` says which). A count above the cap (a lowered cap, or several nodes admitting at once) is reported as `series_over_cap`;
 only new series are refused.
 
+**WAL, backups and checkpoints on PostgreSQL.** Whatever the store writes is logged by the server, and a shared server's backups and WAL
+archive carry that volume together with the rest of the application's. With the tail write the store's chunk writes cost about
+9 to 11 KB (140 KB with the 0.10.0 write) of WAL per series per hour at the default flush interval (one sample per 10 s, measured on synthetic counters; a
+series with a sample every second costs more, a flat one less). 20 000 series are about 0.2 GB of WAL per hour, 4 to 5 GB
+per day, before the rest of the application. Size the server for it:
+
+- **`max_wal_size`**: a checkpoint is forced when this much WAL has accumulated. With the default (1 GB) a busy server checkpoints every few
+  seconds to minutes, and every checkpoint makes the next change of each page a full-page image (8 KB for a change of a few bytes), which
+  is most of the WAL of a store that touches many rows. Set it to several times the WAL the server writes between two timed checkpoints
+  (for example 8 to 16 GB) so that checkpoints are timed, not forced; the log line `checkpoints are occurring too frequently` and
+  `pg_stat_bgwriter.checkpoints_req` growing faster than `checkpoints_timed` say it is too small.
+- **`checkpoint_timeout`**: 15 minutes is a good value for this load (default 5 minutes). A longer interval means fewer full-page images and a
+  longer crash recovery.
+- **`wal_compression`**: `on`, or `lz4` or `zstd` where the server has them. It compresses the full-page images that remain, at a small CPU cost.
+- A **WAL archive** or a replica receives every byte: check the archive's space and the replica's link before enabling the store on a large
+  fleet, and watch `pg_wal` and the archive for the first days. The disk budget limits what the store keeps in its tables, not the WAL it
+  writes, and retention's deletes are logged too.
+
 ### How a flush keeps up
 
-A flush writes the finished chunks first, then the open ones, in transactions of at most 500 rows or 2 MB, several rows per statement.
+A flush writes the finished chunks first, then the new samples of the open ones (tail rows), in transactions of at most 500 rows or 2 MB, several rows per statement.
 Each transaction has its own timeout (a quarter of the flush interval, 2 to 20 s) and a flush starts no new transaction after 70 % of the
 interval. Whatever is left is carried to the next flush, which starts where this one stopped; nothing is retried as a whole. If a
 transaction fails or times out the flush stops there (one `flush_errors`), the store backs off (5 s doubling to 5 min) and the rest
@@ -476,7 +595,7 @@ answer (`partial`, degraded) is stated above the view. A 403 is shown as a refus
   layer protects them; with plain `http://` peers and `SESHAT_CLUSTER_ALLOW_PLAIN_RELAY=1` the request bodies are authenticated by the
   signature but the answers (series lists and samples) travel in the clear and could be altered by anyone on the path. Do not enable
   that mode on a network you do not control. `meta.coverage` says so: `{"nodes":2,"merged":true,"partial":true,"failed":["node-b"]}`. A view shows "partial" when it is set.
-  - Freshness: a replica learns that a series received elsewhere is alive from the series row's last-sample time (written every 2 minutes, see
+  - Freshness: a replica learns that a series received elsewhere is alive from the series' last-sample time (written every 2 minutes, see
     above), so "stale" on the device views is right to within a few minutes. New series rows are found by an incremental refresh that looks
     back 5 000 ids from the highest seen (PostgreSQL can commit a lower id after a higher one), and a full reload every 5 minutes.
   - Known limits: a series that two replicas both received is deduplicated sample by sample; the ranking and table views transfer the

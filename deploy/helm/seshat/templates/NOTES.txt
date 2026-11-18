@@ -8,6 +8,30 @@ UI and API:
 {{- else }}
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "seshat.fullname" . }}-ui 8080:{{ .Values.ui.service.port }}   # then open http://127.0.0.1:8080
 {{- end }}
+{{- $ee := .Values.ui.edgeIngress }}
+{{- $replicas := ternary .Values.console.replicaCount .Values.replicaCount .Values.roles.split | int }}
+{{- $eOn := $ee.enabled }}
+{{- if eq (toString $eOn) "auto" }}{{ $eOn = gt $replicas 1 }}{{ end }}
+{{- $eClass := default .Values.ui.ingress.className $ee.className }}
+{{- $eHash := $ee.nginxHash }}
+{{- if eq (toString $eHash) "auto" }}{{ $eHash = or (not $eClass) (contains "nginx" (lower $eClass)) }}{{ end }}
+{{- if and .Values.ui.ingress.enabled $eOn }}
+  Edge streams: {{ $ee.path }} has its own Ingress and Service ({{ include "seshat.fullname" . }}-edge).
+{{- if $eHash }}
+  It hashes on the {{ $ee.hashHeader }} header (ingress-nginx upstream-hash-by), so each edge reaches one replica and its series have one writer.
+{{- else }}
+  It does NOT hash by itself (class "{{ $eClass }}"): put your controller's "hash on the {{ $ee.hashHeader }} header" in ui.edgeIngress.annotations (or set
+  ui.edgeIngress.nginxHash=true for ingress-nginx). Until then {{ if .Values.cluster.enabled }}the replicas hand each edge's requests to the node that holds its control channel (one hop)
+  and the series still have one writer{{ else }}an edge's requests are spread over all replicas and every replica writes its own copy of its series (cluster.enabled is off){{ end }}.
+{{- end }}
+{{- else if gt $replicas 1 }}
+{{- if not .Values.cluster.enabled }}
+  WARNING: {{ $replicas }} replicas take the UI/API and there is no per-edge routing (ui.edgeIngress is not rendered{{ if not .Values.ui.ingress.enabled }}: ui.ingress is off{{ end }}, cluster.enabled is off):
+  an edge's stream requests reach every replica and each one writes its own copy of the edge's metric series (N times the rows
+  and the write-ahead log). Route /api/edge/ to one replica per edge on your load balancer (hash on the X-Seshat-Edge header) or set
+  cluster.enabled=true. docs/ha.md, "Edge streams: one writer per series".
+{{- end }}
+{{- end }}
   First run: create the first administrator in the browser (POST /api/setup; 409 once any user exists). It needs the setup token:
   set SESHAT_SETUP_TOKEN (>= 32 characters, from a Secret via extraEnvFrom) before the first install; a pod that generates its own
   would not match the other replicas. docs/security.md.
