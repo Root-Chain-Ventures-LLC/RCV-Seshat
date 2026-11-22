@@ -376,3 +376,30 @@ preStop:
   exec:
     command: [{{ $cmd | quote }}, "--drain", "--drain-timeout={{ $v.drain.timeoutSeconds }}s", "--drain-hold={{ $v.drain.holdSeconds }}s"]
 {{- end -}}
+
+{{/*
+  Whether the edge Ingress gets nginx.ingress.kubernetes.io/upstream-hash-by. Prints one word:
+    user  an upstream-hash-by is already in the annotations (inherited or the edge's own); it is kept
+    add   the chart adds it
+    none  it is not added (nginxHash false, or auto and the class is another controller's)
+  nginxHash true / false force. auto: add unless the class NAME clearly names another controller (traefik, haproxy,
+  contour, istio, kong, alb, gce, f5 / nginx-plus / nginxinc, ...). An empty name (the cluster default class) is
+  added. Unsure means add: other controllers ignore an annotation they do not know. The IngressClass is deliberately
+  not looked up: lookup of a cluster-scoped object fails the whole render for a deployer without cluster read rights.
+*/}}
+{{- define "seshat.edgeHash" -}}
+{{- $e := .Values.ui.edgeIngress }}
+{{- $ann := merge (deepCopy (default (dict) $e.annotations)) (ternary (deepCopy (default (dict) .Values.ui.ingress.annotations)) (dict) (default false $e.inheritAnnotations)) }}
+{{- $className := default .Values.ui.ingress.className $e.className }}
+{{- $hash := $e.nginxHash }}
+{{- if eq (toString $hash) "auto" }}
+{{- $hash = true }}
+{{- if regexMatch "(^|[^a-z0-9])(traefik|haproxy|contour|istio|kong|alb|gce|f5|nginx-plus|nginxinc|cilium|ambassador|emissary|apisix)([^a-z0-9]|$)" (lower $className) }}
+{{- $hash = false }}
+{{- end }}
+{{- end }}
+{{- if hasKey $ann "nginx.ingress.kubernetes.io/upstream-hash-by" }}user
+{{- else if $hash }}add
+{{- else }}none
+{{- end }}
+{{- end }}

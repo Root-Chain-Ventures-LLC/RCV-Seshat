@@ -481,7 +481,10 @@ near zero with a healthy cluster; a steady rate means some edges have more than 
 requests to one node, so forwarding is rarely needed (and the answer stays right when the peers are down). Every edge
 request carries `X-Seshat-Edge: <edge id>`. On Kubernetes the Helm chart renders a separate Ingress for `/api/edge/`
 that does this for ingress-nginx (`ui.edgeIngress`, on by default when there are several replicas; see
-[kubernetes.md](kubernetes.md#several-replicas-and-edges)). Elsewhere:
+[kubernetes.md](kubernetes.md#several-replicas-and-edges)). Any IngressClass name works: with `nginxHash: auto` the chart
+hashes unless the class name is another controller's, and `nginxHash: true` forces it. When the Ingress is rendered without a
+hash, the `helm` NOTES say so: the edges are then not pinned (the peer hand-over above still keeps one writer per series
+when `cluster.enabled`). Elsewhere:
 
 - nginx: `upstream seshat { hash $http_x_seshat_edge consistent; server ...; }` for `location /api/edge/`.
 - HAProxy: `balance hdr(X-Seshat-Edge)` (with `hash-type consistent`) in the backend that serves `/api/edge/`.

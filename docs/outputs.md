@@ -232,6 +232,41 @@ or failing disk), the roll, and with it the receive path, waits for it. Elastics
 id as the document `_id`, so a repeat is a harmless version conflict. Disabling a destination or
 stopping Seshat keeps its queue; deleting a destination deletes it (`?keep_queue=true` keeps it).
 
+### What is guaranteed, exactly
+
+These guarantees are tested by killing the process (`SIGKILL`) at each step of the write path and at random
+moments, restarting it, and comparing what reached the destination with what was accepted.
+
+
+- **Before the queue nothing is durable.** The receive path hands a rendered record to an in-memory buffer
+  (up to 16,384 records per destination; a fanned-out event waits in an intake of 32,768). No sender is told
+  anything. A crash (`kill -9`, panic, power) loses what is in those buffers at that moment.
+- **Appended means written, not synced.** When an append returns, the batch has been `write(2)`n to the
+  segment: it survives the death of the Seshat process (the kernel has it), and it survives a power loss or
+  kernel crash only once the segment is synced: within `fsync: interval` (1 s) of the write, before the append
+  returns with `fsync: always` (per batch), at the kernel's pace with `never`. A rolled segment is made durable
+  before the one after it, so a crash loses a tail and never leaves a hole.
+- **A crash never loses an appended record to the queue.** Recovery validates every record by its CRC and
+  cuts a torn tail; the records before it and in later segments are kept (`recovered_bytes`).
+- **Delivery is at least once and in order.** The first occurrence of every record is in append order. After
+  a crash the queue re-sends from the persisted offset: with `fsync: always` at most the batch that was in
+  flight (up to `batching.max_events`, 500 by default); with `interval` the records committed since the offset
+  was last written, which is up to one sync interval plus a batch (the offset is written at most once per
+  interval); with `never` the offset is also written without a sync, so the same bound holds after a process
+  crash and is unbounded after a power loss. A destination must tolerate repeats (Elasticsearch and
+  OpenSearch use the event id as `_id`).
+- **The file destination** counts a record as delivered when `write(2)` of it returned (the file is fsynced at
+  most once a second, whatever `fsync` says). It writes each batch through a 64 KiB buffer, which is flushed
+  when full, so **a crash can leave the output file ending in half a line.** On the next open (first send after a start, and
+  after each rotation) the sender writes a line break first if the file does not end in one, so the fragment stays a damaged line of
+  its own and the next record is never glued to it. A strict NDJSON reader must skip that one partial line (about one per crash);
+  usually the cut record is repeated intact right after. Rotated files are renamed away and never written again; a second process
+  writing the same output file is not supported. A crash during rotation or compression can leave a rotated file both as
+  `.ndjson` and `.ndjson.gz` (the compressed one is the complete copy) and a `.gz.tmp`.
+- **Slow or down destinations** cost the disk, not the receive path: up to `queue.max_bytes` waits in the
+  queue, then `spill` and `backpressure` refuse new records (counted) and `drop_oldest` deletes the oldest segment
+  (counted).
+
 ### Hot reload
 
 Saving a route or destination persists it, then swaps a new route table in atomically. Destinations

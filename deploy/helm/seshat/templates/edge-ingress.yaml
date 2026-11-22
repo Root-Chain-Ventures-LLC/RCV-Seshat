@@ -18,11 +18,7 @@
 {{- $ann = deepCopy (default (dict) .Values.ui.ingress.annotations) }}
 {{- end }}
 {{- $ann = merge (deepCopy (default (dict) $e.annotations)) $ann }}
-{{- $hash := $e.nginxHash }}
-{{- if eq (toString $hash) "auto" }}
-{{- $hash = or (not $className) (contains "nginx" (lower $className)) }}
-{{- end }}
-{{- if and $hash (not (hasKey $ann "nginx.ingress.kubernetes.io/upstream-hash-by")) }}
+{{- if eq (include "seshat.edgeHash" .) "add" }}
 {{- $_ := set $ann "nginx.ingress.kubernetes.io/upstream-hash-by" (printf "$http_%s" (lower (replace "-" "_" $e.hashHeader))) }}
 {{- end }}
 {{- $hosts := list }}

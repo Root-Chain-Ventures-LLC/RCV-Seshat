@@ -13,16 +13,19 @@ UI and API:
 {{- $eOn := $ee.enabled }}
 {{- if eq (toString $eOn) "auto" }}{{ $eOn = gt $replicas 1 }}{{ end }}
 {{- $eClass := default .Values.ui.ingress.className $ee.className }}
-{{- $eHash := $ee.nginxHash }}
-{{- if eq (toString $eHash) "auto" }}{{ $eHash = or (not $eClass) (contains "nginx" (lower $eClass)) }}{{ end }}
+{{- $eHash := include "seshat.edgeHash" . }}
 {{- if and .Values.ui.ingress.enabled $eOn }}
   Edge streams: {{ $ee.path }} has its own Ingress and Service ({{ include "seshat.fullname" . }}-edge).
-{{- if $eHash }}
+{{- if eq $eHash "add" }}
   It hashes on the {{ $ee.hashHeader }} header (ingress-nginx upstream-hash-by), so each edge reaches one replica and its series have one writer.
+{{- else if eq $eHash "user" }}
+  It carries an upstream-hash-by annotation of your own (kept as set); check that it keys on the {{ $ee.hashHeader }} header.
 {{- else }}
-  It does NOT hash by itself (class "{{ $eClass }}"): put your controller's "hash on the {{ $ee.hashHeader }} header" in ui.edgeIngress.annotations (or set
-  ui.edgeIngress.nginxHash=true for ingress-nginx). Until then {{ if .Values.cluster.enabled }}the replicas hand each edge's requests to the node that holds its control channel (one hop)
+  WARNING: this Ingress has NO per-edge hash (class "{{ $eClass }}"), so the edges are not pinned to a replica. For ingress-nginx under any class name set
+  ui.edgeIngress.nginxHash=true; for another controller put its "hash on the {{ $ee.hashHeader }} header" / sticky setting in ui.edgeIngress.annotations (if you have, ignore this)
+  (and ui.edgeIngress.serviceAnnotations). Until then {{ if .Values.cluster.enabled }}the replicas hand each edge's requests to the node that holds its control channel (one hop)
   and the series still have one writer{{ else }}an edge's requests are spread over all replicas and every replica writes its own copy of its series (cluster.enabled is off){{ end }}.
+  docs/ha.md, "Edge streams: one writer per series".
 {{- end }}
 {{- else if gt $replicas 1 }}
 {{- if not .Values.cluster.enabled }}

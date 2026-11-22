@@ -159,6 +159,11 @@ Singleton jobs (retention, session sweep, change-feed pruning) run on one pod.
   (NATS JetStream or Kafka; see [`storage.md`](storage.md)). `queue.bus.mode` sets `SESHAT_QUEUE_BUS_MODE`
   (default `only` for the stateless pods the bus gives you; `hybrid` keeps a local write-ahead queue); the chart
   also sets `SESHAT_DATA_EPHEMERAL=1` whenever `/data` is an emptyDir (`persistence.enabled=false` or the bus on).
+- **Upgrading with a hand-made edge Service or Ingress:** if you created a Service or an Ingress named like the
+  chart's own `<fullname>-edge` (`helm template` shows the exact name) by hand, as the workaround for edges reaching
+  every replica before 0.11.0, delete them or adopt them into the release before `helm upgrade`, or the upgrade fails
+  on an ownership conflict. To adopt each one: `kubectl label <kind>/<name> app.kubernetes.io/managed-by=Helm` and
+  `kubectl annotate <kind>/<name> meta.helm.sh/release-name=<release> meta.helm.sh/release-namespace=<namespace>`.
 - **Rollback:** `helm rollback seshat <revision>` restores the previous pods. Migrations are not
   reversed: take a database backup first for a release that changes the schema (the release notes say when).
   A previous release started on a schema it does not know refuses to start unless every newer migration is
@@ -198,12 +203,15 @@ helm upgrade seshat deploy/helm/seshat --reuse-values \
   Service and applies the hash annotation to it. Hosts and TLS default to those of `ui.ingress`, and so do its annotations
   (`ui.edgeIngress.inheritAnnotations`, on by default; `ui.edgeIngress.annotations` win): the controller takes body
   size, timeouts, `ssl-redirect`, `backend-protocol`, authentication and similar per location from the Ingress that owns
-  it, so without them `/api/edge/` would run on the controller's defaults. The hash annotation is added when the class
-  name is empty (the usual default class is ingress-nginx) or contains `nginx` (`ui.edgeIngress.nginxHash: auto`; `false`
-  if your default class is another controller), unless you set your own `upstream-hash-by` in the annotations. For another
+  it, so without them `/api/edge/` would run on the controller's defaults. The hash annotation is added by `ui.edgeIngress.nginxHash: auto` whatever the class is called
+  (`apps`, `external`, `internal`, ...) and with an empty class name (the default class): it adds it unless the class
+  name is another controller's (traefik, haproxy, contour, istio, kong, alb, gce, f5, nginx-plus; the
+  F5 NGINX Ingress Controller uses `nginx.org/` annotations, so it gets none). Controllers ignore annotations they
+  do not know, so a wrong guess is harmless; `nginxHash: true` forces it, `false` removes it. An `upstream-hash-by`
+  you set yourself is never replaced. For another
   controller put its "hash on the `X-Seshat-Edge` header" setting in `ui.edgeIngress.annotations` (and
-  `serviceAnnotations`). `helm upgrade` NOTES say whether the Ingress hashes, and warn when several replicas have no
-  per-edge routing at all. With `cluster.enabled` the replicas also hand a request to the
+  `serviceAnnotations`). `helm upgrade` NOTES say whether the Ingress hashes and warn when it does not (the edges are then not pinned), and
+  when several replicas have no per-edge routing at all. With `cluster.enabled` the replicas also hand a request to the
   node that holds the edge, so the result is right behind any ingress
   ([Edge streams](ha.md#edge-streams-one-writer-per-series)). Turn the Ingress off with `ui.edgeIngress.enabled=false`.
 - Every replica gets the same peer list, one URL per replica from `replicaCount`, and advertises its own name, both

@@ -226,11 +226,12 @@ ui:
     tls: []                   # empty: ui.ingress.tls
     # The request header that selects the replica. The edge sends X-Seshat-Edge on every request.
     hashHeader: X-Seshat-Edge
-    # The ingress-nginx annotation nginx.ingress.kubernetes.io/upstream-hash-by: "$http_x_seshat_edge". auto: added when
-    # the class name (edgeIngress.className, else ui.ingress.className) is empty (ingress-nginx is the usual default
-    # class) or contains "nginx"; true / false force it. An upstream-hash-by you set in annotations is kept. Another
-    # controller (Traefik, HAProxy, Contour, a cloud load balancer): put its "hash on this header" setting in annotations,
-    # or on the Service.
+    # The ingress-nginx annotation nginx.ingress.kubernetes.io/upstream-hash-by: "$http_x_seshat_edge". true / false
+    # force it. auto (any class name works, "apps", "external", ...; edgeIngress.className, else ui.ingress.className):
+    # adds the hash unless the class NAME is another controller's (traefik, haproxy, contour, istio, kong, alb, gce,
+    # f5, nginx-plus ...; the F5 NGINX controller takes nginx.org/ annotations, not this one). An empty class name
+    # (the default class) gets it. The IngressClass is not looked up (that needs cluster-wide read rights). An upstream-hash-by you set in annotations is kept. For another controller put its "hash on this
+    # header" setting in annotations, or on the Service. NOTES.txt warns when the Ingress ends up without a hash.
     nginxHash: auto
     # Start from the annotations of ui.ingress (body size, timeouts, ssl-redirect, backend-protocol, auth, cert-manager,
     # ...): a controller takes those per location from the Ingress that owns it, so without them /api/edge/ would run on
