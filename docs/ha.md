@@ -477,6 +477,15 @@ http and not allowed; logged once per peer per ten minutes), and `forward_failed
 near zero with a healthy cluster; a steady rate means some edges have more than one writer. `GET /api/edges` carries
 `throughput.stream_forwarded_per_min` and `throughput.stream_local_fallback_per_min` per edge.
 
+**Idle bodies are bounded by the server.** A node reads an edge's stream body before it takes the edge's lock and
+aborts a body that delivers no bytes for 15 s (`408`, nothing taken; the edge resends), so a stalled upload, or a proxy that
+holds a chunked request open, cannot make the edge's next requests answer `503 busy`. This holds on the node that received the
+request and on the owner of a forwarded one: a forwarding node reads and bounds the whole body before it hands it over, and
+the owner already has the whole body when it takes the lock. A body over 8 MiB is not handed over: the forwarding node takes it itself (`local_oversize`), under the same bounds. Watch `seshat_edge_stream_busy_total` (should stay at zero),
+`seshat_edge_stream_idle_body_aborted_total` (a steady rate means an edge or a proxy in front of it stalls uploads) and
+`seshat_edge_stream_request_duration_seconds{outcome}`; a request over 2 s is logged with where its time went
+([edge.md](edge.md#the-stream)). A 0.10.0 node does not do this; during a rolling upgrade it behaves as before.
+
 **Pin an edge to one node at the load balancer as well.** A balancer that hashes on the edge's id sends all of its
 requests to one node, so forwarding is rarely needed (and the answer stays right when the peers are down). Every edge
 request carries `X-Seshat-Edge: <edge id>`. On Kubernetes the Helm chart renders a separate Ingress for `/api/edge/`

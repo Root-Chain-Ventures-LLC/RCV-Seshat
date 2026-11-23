@@ -85,6 +85,27 @@ raw-relay what an edge received.
   counted as `rejected` and skipped for good (the sequence moves past it), `seshat_input_panics_total{input="edge_stream"}`
   is incremented and one rate-limited error line names the edge id; the rest of the batch is delivered and
   acknowledged, so the edge never resends the same poison record forever.
+- **A stalled body never blocks the edge's next request.** The server reads a stream request's body into memory before it takes
+  the edge's per-node lock (up to 16 MiB as it arrives on the wire, far more than a default batch of 4 MiB before compression;
+  all requests of a node share a 256 MiB budget, and a request that cannot reserve more reads the rest of its body under the lock
+  instead of being refused), so a request whose body is slow or idle never makes the edge's next request wait. At most four
+  stream requests of one edge are in a node at once; more get `503` with `Retry-After`. Every read of the body has its own 15 s
+  idle bound; a body that stops for longer is answered `408 idle_body` with nothing taken and the sequence mark untouched, and the
+  edge resends the whole batch (no loss, no duplicate). A body that keeps arriving is not an idle stall, but one request may take
+  at most 5 minutes to deliver it: when that runs out the records that arrived are taken and acknowledged and the edge resends
+  the rest, so even a very slow link makes progress on every request. A body longer than the buffer (or the budget) is read under
+  the lock, under the same bounds. The edge writes a batch's body at once and ends it (the batch is complete before the request
+  starts), so a healthy edge never trips either bound.
+- **Seeing slow requests.** A stream request that takes more than 2 s (or is aborted for an idle body, or answered busy) is logged
+  as `slow edge stream request`, at most once per 30 s per edge, with the edge id, `bytes` and `records` read, `lock_wait`,
+  `body_wait` (time waiting for the edge's bytes), `processing` (everything after the body), of which `store` (the edge's row,
+  its mark and statistics) and `intake` (decoding, enrichment, the sink), `total`, and the `outcome` (`ok`, `idle_aborted`,
+  `body_cut_off` (the connection broke, or the 5 minutes ran out), `busy`, `error`, `canceled`, `bad_request`, `partial`). The
+  limit is per edge and outcome, so a `busy` line does not hide the slow `ok` one that caused it. Prometheus, per node:
+  `seshat_edge_stream_request_duration_seconds{outcome}` (histogram), `seshat_edge_stream_busy_total` (503 busy: the lock wait
+  of 10 s ran out) and `seshat_edge_stream_idle_body_aborted_total`. They count requests taken on that node, including those
+  another node handed over; a request handed over is also counted on the node that received it only when its own body went
+  idle.
 - **Backoff.** Failed batches retry with exponential backoff and jitter (500 ms to 30 s by default; the
   upstream `retry_initial_ms` / `retry_max_ms` change it). `503` and `429` ask for at least 5 s.
 - **Batching.** `batch_events` (500), `batch_bytes` (4 MiB), `flush_ms` (1000), `compress` (true).

@@ -214,6 +214,13 @@ helm upgrade seshat deploy/helm/seshat --reuse-values \
   when several replicas have no per-edge routing at all. With `cluster.enabled` the replicas also hand a request to the
   node that holds the edge, so the result is right behind any ingress
   ([Edge streams](ha.md#edge-streams-one-writer-per-series)). Turn the Ingress off with `ui.edgeIngress.enabled=false`.
+- **Idle request bodies.** The chart sets no `client-body-timeout` on the edge Ingress. The server bounds an idle stream body
+  itself (15 s without a byte: `408`, nothing taken, the edge resends) and no longer holds the edge's lock while it waits for
+  body bytes, so a stalled upload cannot make the edge's other requests answer `503 busy`. ingress-nginx's own
+  `client_body_timeout` (60 s between two reads of the body, when `proxy-request-buffering` is `off`) is longer and would only
+  fire second; a value below 15 s would replace the server's explicit `408` with the controller's. With `proxy-request-buffering`
+  on (the controller's default) the controller reads the whole body before it forwards it, and the server never sees an idle
+  one. If you see `seshat_edge_stream_idle_body_aborted_total` rise, look for what stalls uploads between the edge and the pod.
 - Every replica gets the same peer list, one URL per replica from `replicaCount`, and advertises its own name, both
   by the headless Service: `http://<pod>.<release>-seshat-headless.<namespace>.svc:8080`. A replica skips its own
   entry. Change the replica count with `helm upgrade`: `kubectl scale` leaves the list behind.
