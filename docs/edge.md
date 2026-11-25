@@ -1138,11 +1138,13 @@ Nothing on the stream's intake waits on the metric store (its refresh, fold or f
   ran out the calls of the next 5 s use the cached settings at once. The settings a caller sees are then as old as the slow read lasts (up to
   5 minutes, after which an error). A write on this node (`Invalidate`) drops the read in progress; the next call starts a new one and waits
   250 ms for it.
-- **Poll records** (device, owner, database writes) get at most 3 s each and 5 s per request together; this is the only cap on a request as
-  a whole (the other bounds are per call). A record is not started when less than half of its 3 s of the budget is left, and one the budget cuts off is
-  not stored and not acknowledged: the request ends there with the mark at the last record stored, the same as when the database is away,
-  and the edge sends the rest again (`seshat_edge_poll_records_deferred_total` counts them, and the slow line has `intake_polls_deferred`; they never count toward giving a record up). Server options `PollIntakeBudget` and
-  `PollRecordTimeout` change the two bounds.
+- **Poll records**: the reads before the write (the device, its owner, the settings) and getting a connection from the database are bounded by 3 s; a
+  database that does not answer in that time makes the record be sent again, and asked often enough (40 times or 2 minutes) it is given up, as before.
+  The write itself is not cut at 3 s: a working store may take up to `PollRecordTimeout` (2 minutes) for a large result (a switch with thousands of MAC
+  entries on a big tracker table), and the events before and after the record in the batch are taken in the same request. A request does not start a
+  further poll record once its poll records took `PollIntakeBudget` (5 s): the request ends there with the mark past the records stored, and the edge
+  sends the rest (`seshat_edge_poll_records_deferred_total`, `intake_polls_deferred` in the slow line). A record cut by the server's own bound is sent
+  again; it never counts toward giving it up (only the store's refusals and an unavailable store do).
 
 ### Health and metrics
 
