@@ -218,6 +218,12 @@ merely seen on the wire, which is something you should choose per site, and it n
 you may not want on a collector. Leave it off where an inventory connector already supplies names,
 and turn it on where it is the only source of interface names.
 
+### Interface roles and LAGs
+
+An interface row has, besides its name, alias, speed and status, an optional `lag` (the port-channel it belongs to) and `role` (the interface's role
+in the inventory: `uplink`, `infrastructure`, `access`, `management`). The NetBox connector fills them from the interface's `lag` and `role` (and `mgmt_only`) when
+it fetches interfaces; they feed the [port classes](alerting.md#port-classes), which decide which ports a correlation rule counts as access ports.
+
 ### Interface names for inventory devices
 
 An inventory such as NetBox rarely lists ifIndex values, and a device it lists is *known*, so it is never
@@ -252,6 +258,21 @@ addresses and bare `Loopback 0` are never read as interfaces, and text naming tw
 nothing. The event says where the name came from in `seshat.device.interface.name_source` (`trap_varbind`
 or `trap_text`): it is a hint, not inventory. A name the knowledge base has always wins, and a (device,
 ifIndex) that gave nothing is not scanned again for 30 seconds.
+
+**Names in syslog messages.** A syslog link message names its interface the way the device logs it (Dell OS9
+`Te 0/4`, OS10 `ethernet1/1/10:1`), while the poller stores `ifName` (`TenGigabitEthernet 0/4`). When the
+sender is a known device with interfaces and the message has `seshat.interface.name`, the name is matched
+to the KB's interfaces, first exactly, then in a normal form: the long and short type words are one
+(`Te`, `TenGig`, `TenGigabitEthernet`; `Gi`, `Fo`, `Twe`, `Hu`, `Fa`, `Eth`/`Et`/`Ethernet`, `Po`/`Port-channel`, `Vlan`,
+`Lo`), case, and a space or hyphen after the type, do not matter, and the numbers (slot/port, `:1` breakout
+suffix, `.100` subinterface) must be the same. Exactly one match gives the event
+`seshat.device.interface.{name,index,alias}` (the KB's view) and `seshat.interface.index`;
+`seshat.interface.name` stays exactly as the device wrote it. No match, or two interfaces that the name could
+mean (including two with the same name), stamps nothing. Names with an unknown type word (`ge-0/0/1`) match
+only exactly. The device's interfaces are indexed once per record revision (a bounded cache), so a lookup is
+one map read with no I/O, run only for events that carry an interface name. Traps keep their ifIndex lookup.
+Alert rules key on the `interface` label, which is `seshat.device.interface.name` when the KB resolved it and
+the device's own spelling otherwise, so a syslog link alert is per interface either way.
 
 ### From an edge
 

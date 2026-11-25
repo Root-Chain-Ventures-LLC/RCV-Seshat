@@ -4,7 +4,7 @@ Seshat delivers alert notifications to channels. The alert engine queues each no
 asynchronous and independent of the engine.
 
 
-`Status` is `firing`, `resolved`, `acknowledged`, `escalated` or `test`; `Severity` is `critical`, `major`,
+`Status` is `firing`, `update`, `resolved`, `acknowledged`, `escalated` or `test`; `Severity` is `critical`, `major`,
 `minor`, `warning` or `info`. Queueing does no network I/O: it writes one outbox row per enabled channel.
 The same `Key` sent twice to a channel is queued once. A missing or disabled channel is skipped (counted in
 `seshat_alert_notifications_skipped_total`), not an error.
@@ -74,6 +74,38 @@ Every outbound HTTP request carries a normal product `User-Agent` built from the
 
 Metrics: `seshat_alert_notifications_total{type,result}` (`sent`, `retry`, `failed`, `dead`),
 `seshat_alert_notifications_enqueued_total`, `seshat_alert_notifications_skipped_total`.
+
+## Incidents in notifications
+
+The alert of a [correlation rule](alerting.md#correlation-rules) is one incident for many members, and it reaches the channels as any alert does: `Title` and `Summary`
+say what is down ("7 access ports down on Example Switch 3", the interface names), and `Labels` carries `incident_kind` (`switch` or `site`), `count`,
+`members`, `devices`, `device_count`, `down_for`, `recovered` and `peak` besides the labels of its group, so a channel template can use
+`{{.Labels.count}}` and a policy can send only site incidents to a paging channel (`incident_kind = site`). A notification is sent when the incident
+is first due, again as an update while it is open and its picture changes (see below), and once when it resolves.
+
+### Incident updates
+
+While an incident is open its title, summary and labels change as members join and recover, and its likely cause may become clearer. When that
+changes materially, the engine sends a notification with status `update`. It carries the same fields as the first one, with the current title,
+summary and labels. The engine decides what is material and at most one update is sent per incident every 5 minutes, so a flapping group does
+not flood a channel. `update` is a status like `firing`: chat channels colour it by severity, the webhook JSON says `"status": "update"`,
+and PagerDuty receives another trigger event with the same dedup key, which updates the open incident.
+
+How an update is delivered depends on the channel type. `GET /api/alerting/channel-types` says it as `updates` on each type:
+
+| `updates` | Types | What happens |
+|-----------|-------|--------------|
+| `edit` | `discord`, `fluxer`, `matrix`, `telegram` | The first message of the incident is edited in place. Discord and Fluxer edit the webhook message, Matrix sends a replacement event for the first message, Telegram edits the message text |
+| `message` | `slack`, `teams`, `email`, `irc`, `webhook`, `ntfy`, `pagerduty` | The update is a new message (PagerDuty deduplicates by key) |
+
+Seshat remembers the id each channel gave the first message, per incident and channel, so editing keeps working across restarts and on every replica;
+the id is dropped a day after the incident resolves. When a message cannot be edited (it was deleted, or the server does not support editing, which
+Fluxer may not on every version), the update is sent as a new message once, and later updates edit that one. A temporary failure of the edit is
+retried like any delivery. The resolve notice is always a new message.
+
+The resolve notice carries a summary of the whole incident: its final counts and, when known, its cause. Policies and templates can use these labels of
+an incident: `incident_kind` (`switch` or `site`), `cause` (a short statement of what the incident is probably caused by, when the evidence points to one), `confidence` (how sure the engine is of that cause) and `affected` (what the incident affects), besides `count`, `members` and the others
+above.
 
 ## Templates
 

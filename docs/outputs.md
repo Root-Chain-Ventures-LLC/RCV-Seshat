@@ -220,15 +220,52 @@ events may be sent again.
 
 Durability and ordering. With `fsync: always` a batch is on disk when it is acknowledged,
 including the segment it rolled past, and so is the directory entry of a new segment and the
-renamed `consumer.pos`. With `interval` (the default) data is synced at most one interval after it
-was written, and **a segment is always made durable before the segment after it**: the sync of a
-rolled segment runs in the background, and nothing newer is synced until it has finished, so a
-crash can lose the last second of events but never leaves later events behind a hole. If an
-`fsync` fails, the failure is counted (`queue_sync_errors`, with the latest in `queue_sync_error`
-in the status), the segment stays dirty and is synced again after a short pause, and the segments
-after it are not synced until it succeeds. The append path takes no lock for an `fsync` except in
-one place: when the next segment roll finds the previous rolled segment still being synced (a stalled
-or failing disk), the roll, and with it the receive path, waits for it. Elasticsearch and OpenSearch destinations use the event
+renamed `consumer.pos`. With `interval` (the default) the live segment is synced once per
+interval and a rolled segment is queued for a background worker (up to 16 segments, 128 MiB with the
+default segment size) that syncs them one at a time, **in the order they were rolled, and the live
+segment only after them**. What that guarantees, exactly:
+
+- A process crash (`kill -9`, panic) loses nothing that was appended: the kernel has it.
+- After a **power loss or kernel crash**, what is lost is what was not yet synced: with a disk that
+  keeps up, up to about one interval of accepted records. When the disk is behind, the loss is
+  what is in the backlog: up to 16 rolled segments plus the live one, and the live segment's sync waits behind
+  the worker, so there is no fixed time bound for it while the worker is behind (a disk that is
+  steadily behind is also what makes a roll wait: `queue_depth` and the receive path show it).
+- The order is the order in which the **fsyncs complete**. It is not an order of what reaches the
+  disk: the kernel writes dirty pages back whenever it likes, so after a power loss a newer segment can
+  hold data while an older segment lost its tail (a hole; at most the segments of the backlog, up to 16, can be
+  involved). Every segment after the first of a queue therefore has a small **seal** file next to it, `<seq>.seal`
+(the previous segment's sequence number, size and record count when it was rolled, checksummed; outside the segment
+format, so offsets, `max_bytes` and the segment files are exactly what they were). It is written when the segment is rolled and
+made durable by the background worker after the previous segment's fsync, and deleted with its segment. At start, a segment shorter than its
+successor's seal says is reported: `queue_recovered_holes` / `queue_hole_bytes` in the destination status, the gauge
+`seshat_queue_recovered_holes` (holes among the queued segments; it falls as they are consumed), and a warning in
+the log. The records after the hole are kept and delivered (at least once for what survived); the
+missing tail of the older segment is gone. A hole is counted only when a newer segment holds at least one record; a short tail with nothing after it is the ordinary loss of the last interval and is added to `recovered_bytes`. A seal that is missing, torn or unreadable is no information, never a hole, and the seal can itself be
+lost in the same power cut, so the detection is best effort. Queues written by 0.11.x have no seals and are read as before; a 0.11.x node ignores the `.seal` files
+(downgrading is safe; the files are left behind harmlessly).
+- `consumer.pos` and the directory are fsynced by the consumer's commit without waiting for the
+  background worker, so a power loss can also leave a new segment's file without its older segment
+  being complete: the same hole, found by the same seal.
+- **A failed fsync is final for its segment.** Linux reports a writeback error once per open file and
+  then marks the pages clean, so a retried fsync can succeed without the data being on disk. The first
+  fsync error of a segment is therefore counted (`queue_fsync_errors` in the status,
+  `seshat_queue_fsync_errors_total`), logged once, and the segment is never marked durable and never synced
+  again; the destination is `degraded` (`queue_degraded` says why, `queue_fsync_failed_segments` how many)
+  until the failed segments have been consumed. The queue keeps working: later segments are synced
+  as usual and the failed segment's records are still delivered from the page cache while the process
+  lives. With `fsync: always` the append whose fsync failed returns an error (its records are stored and are delivered all the same, and the segment is never reported durable); the next append rolls to a new segment and is acknowledged again. After an fsync error the ordering and durability guarantees above no longer hold for the affected segment and the destination carries on degraded.
+  `seshat_queue_fsync_errors_total` is the series an alert rule can use.
+- The background worker does one extra fsync per rolled segment (its successor's seal), so a slow disk reaches the 16-segment limit, where a roll waits, sooner than before the seals.
+- `Close` (stopping Seshat) syncs the backlog and then the live segment: with a slow disk it can take up to 16 segment fsyncs.
+- Memory and handles: a rolled segment keeps its file handle open until its fsync is done: at most 16 + 1 handles
+  and 16 segments of data (128 MiB by default) per queue. A segment that is consumed while it is waiting gives its handle back at once.
+
+If an `fsync` of the directory or of `consumer.pos` fails, the failure is counted (`queue_sync_errors`, with the latest in `queue_sync_error`
+in the status) and tried again at the next interval. The append path takes no lock for an `fsync` except in
+one place: a roll that finds 16 rolled segments still waiting (a disk that cannot keep up with the write rate) waits, and with it the receive path,
+until the oldest is done. Up to 0.11.2 the limit was one segment: at 200,000 flow records/s the queue rolls about forty times a second
+and every roll waited for the previous segment's fsync (14 to 20 ms on the benchmark VM's ext4 disk), which showed as a p99 of 25 to 120 ms. Elasticsearch and OpenSearch destinations use the event
 id as the document `_id`, so a repeat is a harmless version conflict. Disabling a destination or
 stopping Seshat keeps its queue; deleting a destination deletes it (`?keep_queue=true` keeps it).
 
@@ -913,6 +950,9 @@ Per destination (`dest` label):
 | `seshat_output_lag_seconds{dest}` | age of the oldest undelivered event (0 when empty) |
 | `seshat_output_last_success_timestamp{dest}` | Unix time of the last delivery (0 before the first) |
 | `seshat_output_blocked{dest}` | 1 while a standing condition stops delivery until someone acts (no `CAP_NET_RAW` for `preserve_source`, enrichment without an enterprise number) |
+| `seshat_queue_fsync_errors_total{dest}` | queue segments whose fsync failed (each counted once; see "What is guaranteed, exactly"); the destination is `degraded` while one is still queued |
+| `seshat_queue_fsync_failed_segments{dest}` | those that are still queued |
+| `seshat_queue_recovered_holes{dest}` | gauge: queued segments that were found at start to have lost their tail to a power loss while newer data survived; falls as they are consumed |
 | `seshat_output_sender_total{dest,counter}` | counters an output type keeps itself; `snmp_trap`: `traps_sent`, `informs_acked`, `informs_unacked`, `send_errors`, `rate_limited`, `skipped` |
 
 Also `seshat_route_unrouted_total`, `seshat_passthrough_unrouted_total`, `seshat_passthrough_records_total{input}`,

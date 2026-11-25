@@ -14,7 +14,9 @@ It polls interface counters and device health over SNMP, turns sFlow counter sam
 interface metrics, keeps a metric history, and has built-in alerting with notification channels (email,
 webhooks, chat and paging services). Vendor packs can be uploaded, activated and rolled back without a
 restart. An alert rule can be dry-run against recent events before it is saved, and a storm view lists the
-busiest senders per dataset. Other tools reach it through a documented REST API (`/api/openapi.json`) and a read-only MCP
+busiest senders per dataset. When many customer-facing ports of one switch or site go down together, a correlation rule raises one
+incident instead of one alert per port, says what is probably going on (an uplink, a power supply or module, a
+reboot, a configuration change, the site) with the evidence, who is affected, and learns each switch's usual rate. Other tools reach it through a documented REST API (`/api/openapi.json`) and a read-only MCP
 endpoint (`/mcp`).
 
 Each input can also ship a **passthrough stream** beside the enriched one: the original message, untouched, as fast

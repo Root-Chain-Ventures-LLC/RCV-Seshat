@@ -99,7 +99,10 @@ raw-relay what an edge received.
 - **Seeing slow requests.** A stream request that takes more than 2 s (or is aborted for an idle body, or answered busy) is logged
   as `slow edge stream request`, at most once per 30 s per edge, with the edge id, `bytes` and `records` read, `lock_wait`,
   `body_wait` (time waiting for the edge's bytes), `processing` (everything after the body), of which `store` (the edge's row,
-  its mark and statistics) and `intake` (decoding, enrichment, the sink), `total`, and the `outcome` (`ok`, `idle_aborted`,
+  its mark and statistics) and `intake` (decoding, enrichment, the sink), `total`, with the intake split: `intake_polls` (poll
+  records) and `intake_polls_took`, `intake_events` (event records decoded and enriched) and `intake_events_took`,
+  `intake_metric_owner` (the question whether the edge is the device's poller, for SNMP metric samples) and `intake_sink` (the sink's
+  `Accept`, summed over the records), and the `outcome` (`ok`, `idle_aborted`,
   `body_cut_off` (the connection broke, or the 5 minutes ran out), `busy`, `error`, `canceled`, `bad_request`, `partial`). The
   limit is per edge and outcome, so a `busy` line does not hide the slow `ok` one that caused it. Prometheus, per node:
   `seshat_edge_stream_request_duration_seconds{outcome}` (histogram), `seshat_edge_stream_busy_total` (503 busy: the lock wait
@@ -1121,6 +1124,25 @@ Poll results share the edge's upstream disk queue with its events. They are only
 size (`upstream.queue_max_mb`); past that the poll fails visibly (`seshat_edge_poll_send_failures_total`, the device's
 status) and is repeated, which leaves the rest of the queue for events; a flood of poll results cannot take the room the
 events need, and a flood of events cannot silently swallow results.
+
+### What a stream request waits for
+
+Nothing on the stream's intake waits on the metric store (its refresh, fold or flush) or on a slow database for longer than a bound:
+
+- **Metric samples** go to the metric store through a bounded queue that never blocks (a full queue drops and counts). The question whether
+  an edge is the poller of the device a sample is about (`MetricOwner`) is answered from a cache; the address index of the inventory is
+  rebuilt in the background; a missing or old answer is worked out in the background and waited for at most 250 ms (then the last answer is
+  used, or the sample is taken, as when the owner cannot be told), and after one such wait the requests stop waiting for 5 s
+  (`seshat_tracker_edge_metric_owner_slow_total` counts them; the samples are taken). The settings of the owner resolver are read without
+  a lock held, shared between the callers, and a caller that has an earlier read waits at most 250 ms for the new one, once: after that wait
+  ran out the calls of the next 5 s use the cached settings at once. The settings a caller sees are then as old as the slow read lasts (up to
+  5 minutes, after which an error). A write on this node (`Invalidate`) drops the read in progress; the next call starts a new one and waits
+  250 ms for it.
+- **Poll records** (device, owner, database writes) get at most 3 s each and 5 s per request together; this is the only cap on a request as
+  a whole (the other bounds are per call). A record is not started when less than half of its 3 s of the budget is left, and one the budget cuts off is
+  not stored and not acknowledged: the request ends there with the mark at the last record stored, the same as when the database is away,
+  and the edge sends the rest again (`seshat_edge_poll_records_deferred_total` counts them, and the slow line has `intake_polls_deferred`; they never count toward giving a record up). Server options `PollIntakeBudget` and
+  `PollRecordTimeout` change the two bounds.
 
 ### Health and metrics
 

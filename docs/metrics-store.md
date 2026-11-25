@@ -35,11 +35,12 @@ events) drops the event and counts it (`queue_dropped`). Everything else happens
 2. the **writer** wakes every `flush_seconds` (default 30) and writes what is new: finished chunks as chunk rows (upserts), and for an open
    chunk only the samples it gained since the previous flush, as insert-only tail rows (see "The write path and its WAL cost"), in
    transactions of at most 500 rows. A failed transaction puts its rows back for the next flush;
-3. the **refresher** re-reads settings, retention and the series list every 30 s.
+3. the **refresher** re-reads settings, retention and the series list every 30 s (and the last-sample times other nodes wrote), and every fifth minute does the full pass (see "Background steps");
+4. the **fold loop** folds tail rows that no live writer will remove into chunk rows, on its own schedule (see "Background steps").
 
 **Durability bound.** Open chunks live in memory, and their flushed part also in tail rows. A crash (or kill -9) loses the samples that were not yet flushed: at most
 `flush_seconds` of data, plus whatever is still in the intake queue (a few seconds at the rates the queue is sized for); what was flushed is
-kept (the node folds its tail rows into chunk rows when it starts again). A clean
+kept (the node's fold loop folds its tail rows into chunk rows soon after it starts again). A clean
 stop drains the queue (every event accepted before the stop is appended) and writes everything, rollup buckets still filling included
 (`TestStopDrainsTheQueueAndWritesEverything`). Rollup buckets are written when they close (every 5 minutes and every hour); a crash
 also loses the 5-minute and 1-hour bucket that were still filling, but not the raw samples, which are flushed, so a bucket can be
@@ -144,7 +145,7 @@ page). The write is now:
    format of a newer release) are left in place. A series whose chunk was dropped without being written (the database refused the series, or
    the pending list was full) has what it had flushed, and the rollup buckets it held in memory, folded into a chunk row before the window's tail
    rows are deleted; a series that is taken again inside the same window opens a chunk of its own, so both are read. Rows that could not be
-   folded keep the window's registration, and the full refresh (every five minutes) tries them again once the window has been over for two hours. Nothing is lost that
+   folded keep the window's registration, and the fold loop tries them again once the window has been over for two hours. Nothing is lost that
    0.10.0 would not have lost.
 5. **Outages and fast sources.** A head remembers at most 256 samples (64 buckets) that are not in the database. When the database was away
    for longer, the next write of that head is its whole chunk, which covers them (the 0.10.0 write), so memory per series stays bounded. A
@@ -602,10 +603,61 @@ answer (`partial`, degraded) is stated above the view. A 403 is shown as a refus
     samples of the lookback window for the series they scan (a few KiB per series), so on a large fleet the fan-out makes them slower than on
     one node; the status endpoint describes this node only.
 
+## Background steps
+
+The store's background work is a list of steps, and **every step has a deadline of its own**. A step that runs out of it is cut off, named in
+the log with how long it took and how long it was given (`metric store: a background step ran out of its own time`, at most once in five
+minutes per step), counted, and takes nothing from the steps after it: the next round does it again, or carries on where it stopped.
+Before 0.11.3 one refresh had one minute for all of its steps, so on a store of a few hundred thousand series the last of them, the
+last-sample read, found the minute spent by the fold and the full series read (`metric last seen: context deadline exceeded`).
+
+| step | what | budget | when |
+|---|---|---|---|
+| `settings` | settings and retention | 20 s | every refresh (30 s) |
+| `series` | the series list: the rows newer than the highest id seen, or every ten rounds (about five minutes) the whole list | 90 s (5 min for the first read after the start) | every refresh |
+| `cluster` | the cluster's nodes (the step of the coarse last-sample column) | 15 s | every refresh |
+| `last_seen` | the last-sample times other nodes wrote | 45 s | every refresh |
+| `disk` | the disk estimate: on a shared PostgreSQL only the leader measures, from a page sample (see below); the others take its figure | 45 s | full pass |
+| `budget` | trimming for the disk budget (leader on a shared database) | 90 s | full pass |
+| `coverage` | the oldest chunk per resolution | 45 s | full pass |
+| `fold` | one pass of the fold loop | 90 s (soft stop at 30 s) | its own loop |
+
+**The disk estimate** used to be a full `SUM(LENGTH(data))` over the chunk and tail tables on every replica every five minutes. On a shared
+PostgreSQL only the leader measures now. For a table of more than 8000 pages (64 MB) it reads a sample of about 4000 pages
+(`TABLESAMPLE SYSTEM`) and scales the sums up (within a few percent; smaller tables are read whole), and it publishes the figure in the
+setting `metricstore.disk`, which the other replicas take (up to 30 minutes old). The full scan is left to what must be exact: after
+trimming for the budget the deletions have to show in the measure, so it is made whole then. A replica that has no fresh figure keeps its
+last one. Until a replica has taken the first figure (a replica that has just started, or a cluster with no leader yet) its estimate is 0, so the disk
+budget does not refuse new series on it; the series cap still does, and the figure arrives within one full pass of the leader's publishing. The setting row
+`metricstore.disk` (JSON: `used`, `data`, `at_ms`) is the only new stored row; a node of an earlier release ignores it. SQLite has a file per node and no election and measures locally as before. `seshat_metricstore_disk_measure_total{how}` counts
+`scan`, `estimate` (sampled) and `adopted`. Budget enforcement is unchanged: new series are refused at the budget, and only the leader trims.
+
+**The fold is not part of the refresh.** It runs in a loop of its own: a pass right after the start, then one every two minutes, and while a
+backlog remains a pass every two seconds. A pass folds the tail rows of this node's earlier runs, and (on the leader of a shared database)
+those of any writer's windows that ended more than two hours ago, as before, and it works in slices of 4000 rows, each its own transaction
+that also deletes the rows it folded. After 30 s a pass starts no new slice; it ends, and the next one carries on from the rows that
+remain. A backlog of hundreds of thousands of tail rows left by a restart is therefore worked off steadily, in the background, without
+holding the refresh or the flush, and a pass that is cut off loses nothing. Readers merge tail rows as they are while they wait.
+
+**Bounds are per call, and the stream's cap is one.** A bound on a wait for the database applies to one call; what keeps a run of calls (the
+records of one request) from waiting once per call is the backoff after the first wait that ran out (the owner resolver and the owner check
+of metric samples: 5 s). The only cap on a whole stream request is the poll budget (see docs/edge.md).
+
+**Locks.** The loops over the whole series list (merging the full read, the sweeps that idle excluded series or move old ones to the idle
+list, ranking and trimming the idle list, the last-sample merge) take the series lock a chunk of 2048 series at a time and let go in
+between; the full read and the ranking of the idle list are done before the lock is taken. A sample waits for the lock for one chunk, not for
+the pass. (Measured on 200 000 series: the longest wait of a sample during a full refresh fell from about 75-85 ms to about 20 ms; the
+flush's planning scan, about 15 ms, is the rest.) Handing a metric event to the store never waits for any of this: `Accept` puts it in the
+bounded queue and returns; a full queue drops the event and counts it (`seshat_metricstore_queue_dropped_total`).
+
+Status (`GET /api/metrics/status`) lists the steps under `steps` (runs, overruns, failures, budget, last and longest duration). Prometheus:
+`seshat_metricstore_step_runs_total`, `_step_overruns_total`, `_step_failures_total`, `_step_seconds_total`, `_step_last_seconds` and
+`_step_max_seconds`, each with a `step` label.
+
 ## Monitoring the store
 
 `seshat_metricstore_samples_total`, `_queue_dropped_total`, `_refused_series_total{cap}`, `_out_of_order_total`, `_flush_errors_total`,
-`_rows_written_total`, `_bytes_written_total`, `_series`, `_queue_length`, `_last_flush_seconds`, `_disk_bytes` (estimate), `_quarantined_total`, `_pending_dropped_total`, `_decode_errors_total`. Samples that are not newer than the
+`_rows_written_total`, `_bytes_written_total`, `_series`, `_queue_length`, `_last_flush_seconds`, `_disk_bytes` (estimate), `_quarantined_total`, `_pending_dropped_total`, `_decode_errors_total`, and the step timings above. Samples that are not newer than the
 series' last one are dropped (`out_of_order`); samples stamped more than 60 seconds ahead of the clock are refused (`future_time`).
 
 ## Measured cost

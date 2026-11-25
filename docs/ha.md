@@ -301,6 +301,32 @@ run against one PostgreSQL:
   the next upgrade, when the node folds those rows into chunk rows at its first start (nothing is lost). Retention of a 0.10.0 node does not
   delete tail rows; the new release removes them.
 
+### Rolling upgrade from 0.11.x: correlation rules and port classes
+
+The release that adds correlation rules (incidents) and port classes (migrations 0327 and 0328) only adds tables, so a 0.11.x node keeps working on
+the upgraded database and the new nodes read everything it wrote ([alerting.md](alerting.md#correlation-rules)). While both run against one
+database:
+
+- **A 0.11.x node does not know the `correlation` kind.** It skips an enabled correlation rule when it loads the rules (it logs `rule skipped` and
+  `seshat_alert_rules_invalid` counts it) and never reads the member log (`alert_member_signals`), so a member of a correlation rule can never become
+  an alert of its own on it. A starter or a rule left disabled costs it nothing.
+- **Correlation rules take effect when every node runs this release.** Every node advertises `alert_correlation` in its cluster heartbeat. While a live node of a
+  shared database lacks it, correlation is paused: an upgraded leader holds incidents back (`suppressed: correlation:paused`) and suppresses no member alert,
+  so each port notifies as it did before, and the rule's status says "correlation paused". It is the safe state, because a 0.11.x leader would clear the suppression
+  of the members' alerts on its next pass and page every port beside the incident. When the last older node is upgraded the suppression applies within seconds, and the incidents held back are released then: **each is notified once, in addition to the
+  per-port pages already sent during the pause** (one extra notification per incident). A node that was decommissioned instead of upgraded keeps correlation
+  paused until its heartbeat is five minutes old.
+  SQLite nodes each have their own file, so nothing pauses there.
+- **While a 0.11.x node holds the leader lease, no correlation rule opens, grows or resolves an incident**: members that went down in that time are
+  logged by the upgraded nodes and folded when an upgraded node leads. Incidents already open stay open, are listed and are notified like any alert
+  (they are ordinary alerts); an incident that should have resolved in the meantime resolves at the first pass of an upgraded leader. Upgrade the node that
+  holds the lease last, or move the lease with a drain, to keep this window short.
+- **A 0.11.x node never reads port classes** (`port_class_obs`, `port_class_selectors`, `port_class_overrides`); its device pages show no class and its
+  interface rows are unchanged. Interface rows written by the new release carry two more optional fields (the LAG and the role of an interface in the
+  inventory) that the older release ignores.
+- **SQLite peers.** The devices section's hash schema is 2: it also covers the LAG and the role of an interface. The two nodes compare at the lower of their schemas (the older form), so they agree while no interface has either; a row from an older peer never wipes a LAG or role an inventory gave an interface here (the merge keeps whichever side has them); once an inventory gives one, a 0.11.x peer's digest cannot match for that device (it ignores the fields) and the Cluster page shows the devices section behind until the peer is upgraded. Nothing is lost.
+- **A rollback** to 0.11.x leaves the new tables unread; open incidents then stay open as plain alerts until closed by hand or until the rule is deleted.
+
 ## What is shared, SQLite versus PostgreSQL
 
 | Data | PostgreSQL mode (shared database) | SQLite mode (peer protocol) |
@@ -314,6 +340,8 @@ run against one PostgreSQL:
 | Users, sessions, audit log | one copy | **per node**: create the same administrators on each node (or use SSO); sign in to the node you administer |
 | Event data and queues | local disk queue per node, never in the database | the same |
 | Cluster membership and health | heartbeat rows in the database | exchanged over the peer link |
+
+**Cause, impact and update notifications (migration 0330).** The incident reasoning adds three tables (`alert_evidence`, `alert_incident_detail`, `alert_notify_refs`), expand-only and unread by a 0.11.x node. Every replica appends the evidence events it receives and the leader reads them when it decides an incident, so a leader change keeps the conclusion; the leader's own bookkeeping of what the last update said is in the database. A 0.11.x node ignores the new `cause`, `impact` and `escalate` fields of a rule and the `incident_update_s` setting (it skips correlation rules anyway), and the `alert_correlation` gate above still holds incidents back, with their cause, until every node has the release.
 
 ### The peer protocol (SQLite mode)
 

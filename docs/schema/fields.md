@@ -248,8 +248,23 @@ Conventions that apply to every field:
 | Field | Type | Origin | Req | Datasets | Description | Example |
 |---|---|---|---|---|---|---|
 | `seshat.interface.name` | keyword | seshat | O | syslog, trap | Interface the event is about, as the device wrote it (set by pack mappings; the KB-resolved name is `seshat.device.interface.name`). | `GigabitEthernet1/0/14` |
-| `seshat.interface.index` | long | seshat | O | syslog, trap | ifIndex of the interface the event is about (set by pack mappings, for example the IF-MIB link traps). | `10114` |
+| `seshat.interface.index` | long | seshat | O | syslog, trap | ifIndex of the interface the event is about (set by pack mappings, for example the IF-MIB link traps, and for a syslog message the ifIndex of the KB interface its name resolved to). | `10114` |
 | `seshat.interface.state` | keyword | seshat | O | syslog, trap | State the event reports: `up`, `down`, `admin-down`, ... (set by pack mappings). | `down` |
+
+### `seshat.hardware.*`
+
+Set by trap mappings (packs/dell/mappings/traps.yaml) for chassis alarms, so a power, fan, temperature or module event can be matched to the ports of the same slot. A value of `-1` ("not applicable" in the Dell MIB) is omitted.
+
+| Field | Type | Origin | Req | Datasets | Description | Example |
+|---|---|---|---|---|---|---|
+| `seshat.hardware.type` | keyword | seshat | O | trap | What the notification is about: `card`, `rpm`, `psu`, `fan`, `fan-or-psu`, `temperature`, `cpu`, `memory`, `stack-unit`, `stack-port`, `port-extender`, `product`, ... | `psu` |
+| `seshat.hardware.slot` | long | seshat | O | trap | Chassis slot (a card or RPM slot). | `3` |
+| `seshat.hardware.unit` | long | seshat | O | trap | Chassis or stack unit. Which of slot and unit equals the first number of a port name depends on the platform; match on either. | `1` |
+| `seshat.hardware.port` | long | seshat | O | trap | Port number the notification names, when it names one. | `12` |
+| `seshat.hardware.index` | long | seshat | O | trap | Power supply id or fan tray id (the notification has one of them). | `2` |
+| `seshat.hardware.psu`, `.fan_tray`, `.fan`, `.pe` | long | seshat | O | trap | Power supply id, fan tray id, fan id, port extender id when the notification carries more than one id. | `4` |
+| `seshat.hardware.status`, `.previous_status` | keyword | seshat | O | trap | PowerConnect global status after and before the change: `ok`, `non-critical`, `critical`. | `critical` |
+| `dell.chassis.alarm_text` | keyword | vendor | O | trap | The free text of a DELL-NETWORKING-CHASSIS-MIB notification (`dellNetSysAlarmVarString`). | `` |
 
 ### `seshat.enrichment.*` and `seshat.route.*`
 
