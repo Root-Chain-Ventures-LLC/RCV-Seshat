@@ -102,7 +102,13 @@ raw-relay what an edge received.
   its mark and statistics) and `intake` (decoding, enrichment, the sink), `total`, with the intake split: `intake_polls` (poll
   records) and `intake_polls_took`, `intake_events` (event records decoded and enriched) and `intake_events_took`,
   `intake_metric_owner` (the question whether the edge is the device's poller, for SNMP metric samples) and `intake_sink` (the sink's
-  `Accept`, summed over the records), and the `outcome` (`ok`, `idle_aborted`,
+  `Accept`, summed over the records), and, when the request's poll records reached the tracker store, what the store did with
+  them: `apply_calls`, `apply_obs`, how many observations took the batch path (`apply_batched`, multi-row statements) and how many
+  went one by one (`apply_one_by_one`, a few statements each), `apply_statements` (each is a round trip to the database), the
+  interval changes `apply_opened`, `apply_extended`, `apply_closed` and `apply_moved`, and the time (`apply_total`,
+  `apply_batch_took`, `apply_one_by_one_took`, `apply_commit_took`). A poll that re-confirms known MACs should show
+  `apply_extended` and few `apply_opened`/`apply_closed`; the same figures are the `seshat_tracker_apply_*` Prometheus series
+  (observations by kind and by path, statements, changes by kind and action, phase times). And the `outcome` (`ok`, `idle_aborted`,
   `body_cut_off` (the connection broke, or the 5 minutes ran out), `busy`, `error`, `canceled`, `bad_request`, `partial`). The
   limit is per edge and outcome, so a `busy` line does not hide the slow `ok` one that caused it. Prometheus, per node:
   `seshat_edge_stream_request_duration_seconds{outcome}` (histogram), `seshat_edge_stream_busy_total` (503 busy: the lock wait
@@ -182,7 +188,7 @@ Other endpoints (all under `/api/edge/v1`, edge credentials unless noted): `POST
 the reply carries the dedup mark and a hint when a new configuration or a certificate renewal is due),
 `GET /config`, `GET /packs`, `GET /kb/snapshot?site=` (an edge can only read its own site and VRF: the snapshot holds
 exactly the devices its events are looked up in) and the
-public `GET /ca`. `config`, `packs` and `kb/snapshot` honour `If-None-Match` and answer `304`. The snapshot's etag covers the devices' content, not their last-seen and write times, so it moves when a device changes (or the server's stale verdict for it does), not at every checkpoint or re-poll. On an edge, `seshat.enrichment.kb_observed_at` is therefore the newest observation the edge holds, the stale verdict reaches it at the next KB sync (about 5 minutes) rather than on its own clock, and an edge cut off from its server keeps its last verdict. Events sent to the server are re-enriched there (the device and enrichment blocks of edge events are cleared and stamped again), so only the edge's local outputs see this.
+public `GET /ca`. `config`, `packs` and `kb/snapshot` honour `If-None-Match` and answer `304`. The snapshot's etag covers the devices' content, not their last-seen and write times, so it moves when a device changes (or the server's stale verdict for it does; a device counts as stale once its refresh time is 15 minutes past, so a routine refresh never flips it), not at every checkpoint or re-poll. The order of a device's lists counts (the first hostname names a device, the first address is its lookup address). The server keeps what it parsed of each device between builds (one copy of the document plus about 1 KB per device, per site and VRF, until it restarts). With several nodes, a device that goes stale can show two etags for a moment (up to the cache lifetime of 15 s plus clock skew between the nodes), which costs one extra download. On an edge, `seshat.enrichment.kb_observed_at` is therefore the newest observation the edge holds, the stale verdict reaches it at the next KB sync (about 5 minutes) rather than on its own clock, and an edge cut off from its server keeps its last verdict. Events sent to the server are re-enriched there (the device and enrichment blocks of edge events are cleared and stamped again), so only the edge's local outputs see this.
 
 ### With several server nodes
 
