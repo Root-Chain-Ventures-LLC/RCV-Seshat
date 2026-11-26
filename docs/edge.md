@@ -182,7 +182,7 @@ Other endpoints (all under `/api/edge/v1`, edge credentials unless noted): `POST
 the reply carries the dedup mark and a hint when a new configuration or a certificate renewal is due),
 `GET /config`, `GET /packs`, `GET /kb/snapshot?site=` (an edge can only read its own site and VRF: the snapshot holds
 exactly the devices its events are looked up in) and the
-public `GET /ca`. `config`, `packs` and `kb/snapshot` honour `If-None-Match` and answer `304`.
+public `GET /ca`. `config`, `packs` and `kb/snapshot` honour `If-None-Match` and answer `304`. The snapshot's etag covers the devices' content, not their last-seen and write times, so it moves when a device changes (or the server's stale verdict for it does), not at every checkpoint or re-poll. On an edge, `seshat.enrichment.kb_observed_at` is therefore the newest observation the edge holds, the stale verdict reaches it at the next KB sync (about 5 minutes) rather than on its own clock, and an edge cut off from its server keeps its last verdict. Events sent to the server are re-enriched there (the device and enrichment blocks of edge events are cleared and stamped again), so only the edge's local outputs see this.
 
 ### With several server nodes
 
