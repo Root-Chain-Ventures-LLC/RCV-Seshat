@@ -301,6 +301,15 @@ run against one PostgreSQL:
   the next upgrade, when the node folds those rows into chunk rows at its first start (nothing is lost). Retention of a 0.10.0 node does not
   delete tail rows; the new release removes them.
 
+### Rolling upgrade: uplink ports and the one-off close
+
+An upgraded node judges the MACs it stores by the port classes (uplinks are not located, port-channels are weak, docs/device-tracker.md, "Uplinks
+and port-channels on the server"); a node of an older release still locates every MAC a switch reports, trunk port-channels included, and moves it
+between switches. The two write the same tables, so a mixed cluster works, but the older node keeps writing the rows the new rule avoids. The
+one-off close of the open rows on uplink ports therefore waits until every live node lists the `tracker_uplink_rule` feature in its heartbeat
+(a node whose heartbeat is older than five minutes does not count); until then it does nothing and tries again at the next pass. A SQLite node, or a
+cluster of one, is ready at once. Closing a port's rows because an operator set it to uplink does not wait: it is the operator's explicit decision.
+
 ### Rolling upgrade from 0.12.1: how a poll is stored
 
 A poll's MAC table is stored in batches (a few multi-row statements per few hundred MACs instead of several statements per MAC; the tracker store's

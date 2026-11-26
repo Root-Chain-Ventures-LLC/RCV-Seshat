@@ -420,6 +420,11 @@ a port has several neighbours the strongest wins (an uplink beats infrastructure
 - **Override.** `PUT /api/devices/{id}/port-classes/override` (`{"interface": "ethernet1/1/7", "class": "access", "note": "..."}`) sets the
   class of one interface by hand; it wins over everything, and `DELETE ...?interface=` removes it. The console's device page has a Class
   column with this control, and Alerts, Port classes edits the selectors.
+- **Suggested interconnects.** The tracker suggests ports that look like trunks from the MACs the ports hold (a port whose MACs another polled device
+  sees on at least two of its non-uplink ports). A suggestion is advisory (the port's class is not changed, the `suggested` field says why); confirm it by overriding the
+  port to uplink, or with `POST /api/devices/{id}/port-classes/detected/confirm?interface=` and `POST /api/port-classes/suggested/confirm`, or dismiss it with
+  `DELETE /api/devices/{id}/port-classes/detected?interface=` (docs/device-tracker.md, "Suggested interconnects"). The inventory roles `uplink`, `trunk`, `core`, `backbone` and `interconnect` make an
+  interface an uplink (NetBox: an interface custom field `role` or a tag of that name).
 - **Where the facts come from.** The interface table (name, alias, type) is the knowledge base's: SNMP polling, or the inventory (NetBox
   interfaces now also bring the LAG an interface belongs to and its role). LLDP/CDP neighbours and LAGs are what the Device Tracker's poller
   saw on the last full poll of the device; the replica that polled stores them, so every replica classifies from the same facts

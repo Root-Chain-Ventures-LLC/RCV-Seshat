@@ -66,6 +66,133 @@ switch case.
 A MAC that appears on several non-uplink ports in one poll is placed on the lowest ifIndex, so the
 choice is stable between polls and never flaps.
 
+### Uplinks and port-channels on the server
+
+The rule above is applied by the poller, from the neighbours it saw in its own poll. With a
+port-channel the neighbour is usually on the physical members while the FDB learns the MACs on the
+port-channel's own interface, so the port-channel is not an uplink to the poller, and an edge of
+0.11.x does not know about port classes at all. Every switch of a trunk would then locate every MAC
+behind it, and each poll would move the MAC from the switch polled before. The server therefore
+applies the [port classes](alerting.md#port-classes) to the polled MACs it stores, whichever
+version the edge is, and the server's own poller and "Poll now" apply the same rules. Only wired
+locations from FDB polls are judged (a subscriber circuit is a place of its own, not a port a MAC is
+learned on). The class is looked up by the ifIndex the poll carries for that device, then by the
+port name, from memory:
+
+| What the port classes say | What happens to a polled MAC learned there |
+| --- | --- |
+| **Uplink on structural evidence**: a switch or router neighbour, an inventory role (`uplink`, `trunk`, `core`, `backbone`, `interconnect`), a selector's bridge rule, or an operator's override to uplink | Not located. Nothing is written (not even the identity's last seen); counted as `obs_uplink`. |
+| **Infrastructure by an operator's override** | Not located; counted as `obs_infrastructure`. |
+| **Port-channel (or a member) and nothing else** (class source `lag`) | *Weak*: see below. |
+| **Access**, **unknown** (no interface table in the knowledge base), and every infrastructure port an operator did not set (a selector that leaves the port out, an access point or server neighbour, the interface type `other`) | Located as before. Those ports are not "behind" anything: dropping them would hide real devices. |
+
+**Weak** (a port-channel and nothing else): the MAC is located there only if it has no open location
+anywhere, and an interval already open at that device, port and VLAN is extended. A MAC whose open
+location is elsewhere is **moved only on positive evidence that it left**: the device of that open
+location completed a successful poll after the location's last confirmation (by more than two
+seconds) and that poll did not re-confirm it. However often devices are polled (a 30-minute interval,
+a short tolerance, a device in backoff), an access-port MAC is therefore not moved between its device's
+polls, and live flapping between two trunks, where each switch re-confirms its own row at every poll,
+moves nothing. When the poll time of that device is unknown (a row from a trap or syslog sighting,
+a device that is not polled) or its last poll failed or was partial, the MAC is not moved. A host that really
+moved from an access port onto a bond follows at the first poll of its old switch that no longer sees it.
+The same holds for a sighting from the device that holds the open location: a poll arrives in several records, and a MAC can be in two VLANs
+of one device, so only the completed poll (recorded after its last record) tells that the MAC is gone from the access port. A server's bond stays located; an ignored observation writes nothing. An access
+observation always wins and moves a MAC off a port-channel location. To make a host-facing
+port-channel an ordinary port, set its class to **access** (Alerts, Port classes, override). Setting
+a port to uplink or infrastructure skips it, and closes its open rows (below). The same rules
+apply to sightings from traps (MAC notifications) when the port is known by ifIndex.
+
+Known, rare race: two replicas that weak-open the same MAC at the same moment (a MAC seen for the
+first time on port-channels of two switches polled by two nodes) can leave two open rows for it; a
+weak observation that extends one does not close the other. The next access observation of the MAC
+closes the extra, or it expires.
+
+Locations that were opened on such ports before the upgrade are not re-confirmed any more and close
+after `expire_after_hours` like any stale interval; the [one-off close](#one-off-close-of-locations-on-uplink-ports)
+does it at once for ports that are uplinks on structural evidence.
+
+### Marking trunks in the inventory
+
+The simplest way to say once which ports are trunks is the interface role in the inventory. The
+roles `uplink`, `trunk`, `core`, `backbone` and `interconnect` make the port an uplink (case-insensitive);
+the tracker then drops what is polled there and the one-off close closes the rows already open.
+
+**Mark only ports that face another switch or router.** `trunk`, `core`, `uplink`, `backbone` and `interconnect` mean "this
+port leads to another switch or router": the tracker stops locating MACs there and closes the rows already open on it. An 802.1Q trunk
+to a **server or hypervisor must not be tagged that way** (the hosts behind it would lose their locations); leave it
+untagged (a port-channel to a host then stays weak) or override it to access.
+
+- **Nautobot**: the interface's `role` (read from its name, slug or label).
+- **NetBox** (no interface role of its own): an interface **custom field named `role`** (text or a
+  choice field), or an interface **tag** whose slug or name is `uplink`, `trunk`, `interconnect`, `core` or
+  `backbone`. Precedence: a `role` the API already gives (Nautobot), then the custom field, then the tag. Any other tag is
+  ignored. Interfaces are read only when the connector fetches interfaces (see the device
+  knowledge base), and an interface without the ifIndex custom field is skipped.
+- **CSV file and HTTP JSON connectors**: they carry no interface table at all today, so there is
+  no per-interface role to set there. Use the port class override (Alerts, Port classes, or
+  `PUT /api/devices/{id}/port-classes/override`) or the suggestions below.
+
+### Suggested interconnects
+
+A port-channel between two switches has no neighbour on its own interface, so the tracker also
+looks at what the ports hold. Every 5 minutes the leader reads the MACs located per port in the last
+30 minutes (open rows and rows closed meanwhile: a MAC that flaps has one open row at a time) and
+**suggests** the ports that look like interconnects. **A suggestion is advisory: it never changes a
+port's class, what is located there or what is closed.** The operator confirms it, or not.
+
+The rule is spread: port P on device X is suggested when, for some other polled device Y, at least
+`MinShared` (16) of P's MACs are seen on Y **and on at least `MinSpread` (2) distinct ports of Y
+that are not Y's own uplinks** (a port the classes call uplink, from any source, or an
+infrastructure port an operator set, does not count on Y's side, and a device whose interface table
+is unknown is not used). A trunk toward Y aggregates MACs that Y sees on several of its access ports.
+An access port, a hub, a dual-homed (MLAG) host or a VM that moved shows its MACs on Y on one port. The number
+of switches in one layer 2 domain is not limited; a port holding more than 50 000 MACs is sampled
+(the same MACs on every port). A suggestion
+can still be wrong (a mass evacuation of VMs to two hosts of another switch, clients roaming to two
+access points, a loop cable show the same spread), which is why nothing acts on it by itself.
+
+Limits, stated plainly: **a trunk is suggested only when the other polled switch sees its MACs on at least two of its non-uplink
+ports**; if it sees them on one access port (even with far-side MACs on its own trunk), nothing is suggested and a port-channel stays weak.
+A physical (non-LAG) trunk of the other switch with no LLDP/CDP evidence and no inventory role is not an uplink to the classes, so it
+still counts on that side.
+
+Where to see them: `GET /api/devices/{id}/port-classes` (a `suggested` field on the port, with the evidence: "its MACs are seen on
+42 ports of Example Switch 2 (310 MACs)", class unchanged), the console's port classes, and `/api/tracker/status`
+(`suggested_interconnects`, not shown to a caller limited to some sites or tenants).
+
+What the operator does:
+
+- **Confirm**: set the port's override to uplink (`PUT /api/devices/{id}/port-classes/override`), or
+  `POST /api/devices/{id}/port-classes/detected/confirm?interface=` which does the same with the note "confirmed suggestion: <evidence>".
+  `POST /api/port-classes/suggested/confirm` with `{"device_id": ...}` or `{"site": ...}` (exactly one: there is no confirm-all) confirms every
+  current suggestion in that scope and returns the ports with their evidence; `"dry_run": true` returns the list and writes nothing, and
+  `"expect": [{"device_id": ..., "interface": ...}]` (the ports of the dry run) confirms only those, so a suggestion that appeared since is not
+  confirmed. A suggestion that was settled since it was made (an override, a changed class, an interface that left the table) is refused
+  (409 for one port) or skipped and listed with the reason (bulk); setting an override or dismissing removes the suggestion at once. Each
+  confirmation closes the port's open rows (counts logged and audited, no MACs); a bulk confirm writes one audit record with the scope and the count.
+- **Dismiss**: `DELETE /api/devices/{id}/port-classes/detected?interface=`. A dismissed suggestion stays dismissed until its
+  evidence shows again 24 hours after the dismissal. Override the port to access to keep it from being suggested at all.
+
+A suggestion stays until the operator acts on it, or until its interface is no longer in its device's interface table (a device
+whose table is unknown or empty keeps its suggestions). Suggestions are stored in the `portclass.detected` setting and updated with a
+compare-and-set, so nodes and operators do not lose each other's changes.
+
+### One-off close of locations on uplink ports
+
+Once per cluster per rule version, after the port classes know the devices' interface tables, the leader closes the **open
+wired locations on ports the classes drop**: uplinks on structural evidence (a neighbour, an inventory role, a selector's bridge
+rule, an operator's override to uplink) and ports an operator overrode to infrastructure. Access, unknown, every other
+infrastructure port, weak port-channels and ports that are only suggested are never touched. A row closes at its last confirmation, as expiry
+does, and is reported as a close change; the port's class is checked again when the row is closed. It works in transactions of
+500 rows, logs counts per device, class, source and port type (no MACs), and a device without a port table is left for a later pass;
+after 24 hours from the first attempt the job finishes anyway and the device's rows expire as before. **It runs only when every live
+node of the cluster runs the release that no longer locates MACs on uplink ports** (the nodes list `tracker_uplink_rule` in their
+heartbeat; docs/ha.md): an older node would write the rows again; until then the tracker status shows `uplink_cleanup` with the state
+"waiting for nodes" and the nodes that do not run it yet. Its state is in the tracker status (`uplink_cleanup`) and in the
+`tracker.uplink_cleanup` setting. Two nodes starting together close each row once. Setting a port to uplink or infrastructure later
+(an override, or confirming a suggestion) closes that port's open rows the same way.
+
 ## Poll intervals
 
 | Class | Default | Used by |
