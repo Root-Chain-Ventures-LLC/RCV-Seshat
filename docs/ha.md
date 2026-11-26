@@ -301,6 +301,19 @@ run against one PostgreSQL:
   the next upgrade, when the node folds those rows into chunk rows at its first start (nothing is lost). Retention of a 0.10.0 node does not
   delete tail rows; the new release removes them.
 
+### Rolling upgrade from 0.12.1: how a poll is stored
+
+A poll's MAC table is stored in batches (a few multi-row statements per few hundred MACs instead of several statements per MAC; the tracker store's
+`Apply`). It writes the same tables and columns as 0.12.1 (no migration), so a 0.12.1 node and an upgraded node can store polls at the same time:
+
+- The result of a poll is the same rows and the same changes either way. The batch path decides the timestamps against the stored row (a row another
+  node confirmed later is not moved back, the identity's first seen only goes back and its last seen only forward), so two nodes never lose each
+  other's newer confirmation.
+- A batch sends its rows in a fixed order (interval rows by id, then identity rows by MAC), a 0.12.1 node writes them MAC by MAC; the order makes deadlocks rare, it does not rule them out. If two nodes store
+  polls of the same MACs at the same moment, PostgreSQL may pick one of the two transactions as the victim of a deadlock: nothing of it is written, the
+  upgraded node repeats its transaction (up to five times), and a 0.12.1 node reports a failed store that is sent again. A device is polled by one node
+  at a time, so this is a window of one rollout, not a steady state.
+
 ### Rolling upgrade from 0.11.x: correlation rules and port classes
 
 The release that adds correlation rules (incidents) and port classes (migrations 0327 and 0328) only adds tables, so a 0.11.x node keeps working on
