@@ -87,8 +87,11 @@ port name, from memory:
 | **Access**, **unknown** (no interface table in the knowledge base), and every infrastructure port an operator did not set (a selector that leaves the port out, an access point or server neighbour, the interface type `other`) | Located as before. Those ports are not "behind" anything: dropping them would hide real devices. |
 
 **Weak** (a port-channel and nothing else): the MAC is located there only if it has no open location
-anywhere, and an interval already open at that device, port and VLAN is extended. A MAC whose open
-location is elsewhere is **moved only on positive evidence that it left**: the device of that open
+anywhere, and an interval already open at that device and port (in any VLAN) is extended. A MAC whose open
+location is elsewhere is **moved only on positive evidence that it left**, and **never when that open location is itself on a weak port**
+(moving between two transit ports says nothing about where the MAC is: a MAC seen in several VLANs at once, a router or hypervisor interface,
+is on the port-channels of several switches, and stays where it was first located until an observation that is not weak, or the expiry,
+says otherwise; the port classes judge the open location's port as they judge an observation): the device of that open
 location completed a successful poll after the location's last confirmation (by more than two
 seconds) and that poll did not re-confirm it. However often devices are polled (a 30-minute interval,
 a short tolerance, a device in backoff), an access-port MAC is therefore not moved between its device's
@@ -189,8 +192,8 @@ does, and is reported as a close change; the port's class is checked again when 
 after 24 hours from the first attempt the job finishes anyway and the device's rows expire as before. **It runs only when every live
 node of the cluster runs the release that no longer locates MACs on uplink ports** (the nodes list `tracker_uplink_rule` in their
 heartbeat; docs/ha.md): an older node would write the rows again; until then the tracker status shows `uplink_cleanup` with the state
-"waiting for nodes" and the nodes that do not run it yet. Its state is in the tracker status (`uplink_cleanup`) and in the
-`tracker.uplink_cleanup` setting. Two nodes starting together close each row once. Setting a port to uplink or infrastructure later
+"waiting for nodes" and the nodes that do not run it yet. Its state is in the tracker status (`uplink_cleanup`, the same on every replica: it
+is read from the `tracker.uplink_cleanup` setting, and the waiting state from `tracker.uplink_cleanup_waiting`, which the leader clears when the gate opens). Two nodes starting together close each row once. Setting a port to uplink or infrastructure later
 (an override, or confirming a suggestion) closes that port's open rows the same way.
 
 ## Poll intervals
