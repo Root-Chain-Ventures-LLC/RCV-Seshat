@@ -349,6 +349,28 @@ database:
 - **SQLite peers.** The devices section's hash schema is 2: it also covers the LAG and the role of an interface. The two nodes compare at the lower of their schemas (the older form), so they agree while no interface has either; a row from an older peer never wipes a LAG or role an inventory gave an interface here (the merge keeps whichever side has them); once an inventory gives one, a 0.11.x peer's digest cannot match for that device (it ignores the fields) and the Cluster page shows the devices section behind until the peer is upgraded. Nothing is lost.
 - **A rollback** to 0.11.x leaves the new tables unread; open incidents then stay open as plain alerts until closed by hand or until the rule is deleted.
 
+### Rolling upgrade: address bindings per reporting device (migration 0332)
+
+Migration 0332 adds the nullable column `tracker_l3.device_id` (metadata only, no index and no rewrite) and recreates the `intervals_l3` view; it is expand-only, so a
+0.12.x or 0.11.x node keeps working on the upgraded database. The new release keys a polled ARP binding by `(ip, vrf, device_id)` (see
+[device-tracker.md](device-tracker.md#address-bindings-one-view-per-reporting-device)). While both versions write to one database:
+
+- **A node of the previous release does not write the column**: its rows have `device_id` NULL, and it still keeps one open row per address,
+  closing the rows of every device when it stores another MAC for the address. Until it is upgraded the old churn is possible again for the
+  addresses it polls (one close and one insert per changed MAC), never a wrong binding; the new nodes adopt the rows it leaves behind (a row
+  with no device is adopted by the first device that reports the same MAC, closed when a device reports another).
+- **Readers**: a new node reads several open rows for an address when several devices report it; an old node reading the same table reads
+  them all as well (its queries do not assume one) and shows the MACs of every row, with no device.
+- **Push sync (portal)**: the `intervals_l3` entity gains an optional `device_id` as its last column: a record carries the key only for a binding that has a
+  device, so a row without one is encoded and hashed exactly as before the column. A sender with the column and a receiver without it: the receiver
+  ignores the key (contract rule: unknown keys are ignored). A sender without the column and a receiver with it: the key is absent and the receiver stores
+  NULL. After the upgrade the sender re-sends **no** legacy row: only a row that has a device (a new binding, or a legacy one a device adopted) is sent, once.
+  The contract version stays 1. Expect the table to hold up to N rows for an address that N devices report (one per reporting device), on the portal too.
+- **PostgreSQL views**: `tracker_public.intervals_l3` gains `device_id` when the new node starts and recreates the views. A node of the previous
+  release that restarts during the rollout recreates the views without the column. Until the next node of this release starts, lookups on the new
+  nodes read NULL for `device_id` (a minute at a time), and the push sync skips `intervals_l3` (it keeps its state for it and sends the other entities as
+  usual) rather than send the bindings without their devices; a snapshot in that state fails and is retried.
+
 ## What is shared, SQLite versus PostgreSQL
 
 | Data | PostgreSQL mode (shared database) | SQLite mode (peer protocol) |

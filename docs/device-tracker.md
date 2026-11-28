@@ -41,6 +41,20 @@ instead of minutes. See [event-driven sightings](#event-driven-sightings).
 The current location of a MAC is the open location or wireless interval that was confirmed most
 recently. A port that has a switch or router behind it is never a location (next section).
 
+### Address bindings: one view per reporting device
+
+A polled ARP/ND table (`poll-arp`) is one device's **own view** of the addresses it knows, so the bindings it
+produces are kept per device: an address (in a VRF) can have **one current MAC per reporting device**. Two switches that both
+report a shared gateway address, each with the router MAC of its own, keep one open binding each and never close each other's;
+a device whose own view changes (the address is now behind another MAC) closes its own binding and opens a new one. Every
+binding carries the device that reported it (`device` in the lookup, the prefix bindings, the CSV export and the
+`tracker_public.intervals_l3` view). Bindings from every other source (DHCP, sightings, traps, flow records, subscriber
+tables, controller APIs) carry no device and keep the rule they always had: the address belongs to one MAC, and an
+observation of another MAC closes the open bindings of the first, whichever device reported them. A binding without a device
+(written by such a source, or before the device was recorded) is **adopted** by the first device whose ARP table reports the same
+MAC, and closed when a device reports another MAC for the address. A lookup of an IP therefore returns every current holder,
+each with its device; where one answer is needed the newest confirmation wins, then the highest interval id.
+
 ### Why uplinks are excluded
 
 A MAC learned on a trunk or inter-switch port is not "on" that port. It is somewhere further away
@@ -801,7 +815,9 @@ A `user` or `viewer` gets `403 forbidden` where the table says so, never an empt
 to the audit log (who, what, when). Settings can hide facts from the `user` role (user name,
 hostname, inventory trace, user history, IP history); the hidden paths are listed in the response's
 `redactions` so the UI can say "hidden by policy". CSV cells that start with `=`, `+`, `-` or `@` are
-prefixed with a quote so a spreadsheet does not run them.
+prefixed with a quote so a spreadsheet does not run them. In the CSV export the `device` column is the name of the device a row
+belongs to (a location's switch, or the polled device that reported an L3 binding) and `device_id` its id; where no name is known
+`device` repeats the id, and both are empty for a row no device reported.
 
 The endpoints are in `GET /api/openapi.json`. Operator and admin pages: **Device Tracker** in the
 navigation (Lookup, Tracked devices, Port history, Watch lists, Approved devices).
@@ -908,7 +924,7 @@ both in the contract of [`schema/tracker.md`](schema/tracker.md) (field-level de
 - `GET /api/tracker/bindings?site=<site>&prefix=<cidr>` returns the current ARP / ND / DHCP bindings of one site inside an
   IPv4 or IPv6 prefix, paged with an opaque cursor (default 500 rows, at most 5000; a short page with a cursor means "continue", only a null
   cursor is the end). The site must be inside the caller's scope (`403 out_of_scope`, also audited, as `denied`). One audit
-  event (`tracker.bindings`) per page. A batch is bounded too: history per item is the `history_limit` setting, at most
+  event (`tracker.bindings`) per page. An address that several devices report appears once per reporting device (each with its `device`). A batch is bounded too: history per item is the `history_limit` setting, at most
   2000 devices in all, body up to 256 KiB.
 
 Both are open to admin, operator, viewer, `tracker:read` tokens and integration clients holding `tracker.bulk` (rate limited per call: a batch is one admit), and closed to the `user` role: they return many devices

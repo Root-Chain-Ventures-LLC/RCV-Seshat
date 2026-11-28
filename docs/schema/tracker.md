@@ -202,6 +202,7 @@ response. Requires an authenticated session or API token. Every call is audited 
 | `l3.ips[].lease_expires` | timestamp | no | DHCP lease expiry when known |
 | `l3.ips[].circuit_id`, `.remote_id` | string | no | DHCP option 82 sub-options (additive) |
 | `l3.ips[].relay_agent` | string | no | The DHCP relay agent address (giaddr) that forwarded the exchange, as reported by the sighting (additive). `location.circuit.device` is the device the tracker resolved the relay to; this is the address itself |
+| `l3.ips[].device` | object | no | `{ "id", "name" }` of the polled device whose ARP/ND table reported the binding, as on `location.device` (`name` is the id where no name is known; additive). Absent for every other source and for bindings written before the device was recorded. An address can be bound to **several MACs at once, one per reporting device** (two switches that report a shared gateway address each with a router MAC of their own): the lookup of that IP returns one result per MAC, each with its own `l3.ips[]` entry and `device_id`, newest confirmation first |
 | `l3.ips[].since` | timestamp | yes | Start of the current interval |
 | `l3.ips[].observed_at` etc. | provenance set | yes | `observed_at` is the "last confirmed" time |
 | `history[]` | array | yes (may be empty) | Intervals, all kinds mixed, newest `from` first |
@@ -211,7 +212,7 @@ response. Requires an authenticated session or API token. Every call is audited 
 | `history[].to` | timestamp or null | yes | When the interval closed (the entity moved or the fact expired); null while it is current |
 | `history[].last_confirmed` | timestamp | yes | Last time the fact was re-confirmed |
 | `history[].source`, `.confidence` | string, number | yes | |
-| `history[]` kind attributes | | | location: `site`, `device`, `port`, `vlan`, `circuit_id` (circuit locations carry no `port` unless known). l3: `ip`, `vrf`, `gateway`. wireless: `site`, `ap`, `ssid`, `band`. user: `ip`, `user` |
+| `history[]` kind attributes | | | location: `site`, `device`, `port`, `vlan`, `circuit_id` (circuit locations carry no `port` unless known). l3: `ip`, `vrf`, `gateway`, `device` (additive). wireless: `site`, `ap`, `ssid`, `band`. user: `ip`, `user` |
 | `history_truncated` | boolean | yes | True when older intervals were cut off by a server limit |
 
 Top level: `contract`, `generated_at`, `data_as_of`, `stale_after_seconds` (the threshold the
@@ -308,8 +309,8 @@ Contract name `seshat.tracker.bindings`, **version 1**, with the conventions abo
 ```
 
 - A binding is the `l3.ips[]` entry of the lookup (same names, same provenance set, `observed_at` is
-  the last confirmation) plus `mac`. `gateway`, `lease_expires`, `circuit_id`, `remote_id` and
-  `relay_agent` are omitted when unknown.
+  the last confirmation) plus `mac`. `gateway`, `lease_expires`, `circuit_id`, `remote_id`,
+  `relay_agent` and `device` are omitted when unknown. An address several devices report is listed once per device.
 - Only current bindings are listed (open intervals); history stays in the lookup. Rows are ordered
   by interval id, which is stable while the table changes, not by address; sort on the client.
 - **Paging: a short page with a cursor means "continue".** A request reads at most
@@ -427,7 +428,7 @@ Wired location history. One row per `(mac, device, port, vlan)` interval.
 
 ### `tracker_public.intervals_l3`
 
-IP to MAC history. One row per `(mac, ip, vrf)` interval.
+IP to MAC history. One row per `(mac, ip, vrf, device_id)` interval: a polled ARP table is one device's view, so an address can have several open rows, one per reporting device.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -446,6 +447,7 @@ IP to MAC history. One row per `(mac, ip, vrf)` interval.
 | `source` | text | |
 | `confidence` | real | |
 | `circuit_id`, `remote_id` | text | DHCP option 82 sub-options when the relay added them (additive; null otherwise) |
+| `device_id` | text | The polled device whose ARP/ND table reported the binding (additive, appended last; null for every other source and for rows written before the column). In a sync record the key is left out while the value is null (a row without a device is encoded as before the column). A sender that predates the column sends no `device_id` and the receiver stores null; a receiver that predates it ignores the key |
 
 ### `tracker_public.intervals_wireless`
 
